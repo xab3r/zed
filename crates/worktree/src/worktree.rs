@@ -149,6 +149,7 @@ pub struct PathPrefixScanRequest {
 
 struct ScanRequest {
     relative_paths: Vec<Arc<RelPath>>,
+    recursive: bool,
     done: SmallVec<[barrier::Sender; 1]>,
 }
 
@@ -1919,15 +1920,41 @@ impl LocalWorktree {
         }))
     }
 
-    pub fn refresh_entries_for_paths(&self, paths: Vec<Arc<RelPath>>) -> barrier::Receiver {
+    fn queue_scan_request(
+        &self,
+        relative_paths: Vec<Arc<RelPath>>,
+        recursive: bool,
+    ) -> barrier::Receiver {
         let (tx, rx) = barrier::channel();
         self.scan_requests_tx
             .try_send(ScanRequest {
-                relative_paths: paths,
+                relative_paths,
+                recursive,
                 done: smallvec![tx],
             })
             .ok();
         rx
+    }
+
+    pub fn refresh_entries_for_paths(&self, paths: Vec<Arc<RelPath>>) -> barrier::Receiver {
+        self.queue_scan_request(paths, false)
+    }
+
+    pub fn reload_entries_for_paths(&self, paths: Vec<Arc<RelPath>>) -> barrier::Receiver {
+        self.queue_scan_request(paths, true)
+    }
+
+    pub fn reload_filetree(&self) -> barrier::Receiver {
+        let mut loaded_directories = self
+            .snapshot
+            .entries(true, 0)
+            .filter(|entry| entry.kind == EntryKind::Dir)
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        if loaded_directories.is_empty() {
+            loaded_directories.push(RelPath::empty().into());
+        }
+        self.reload_entries_for_paths(loaded_directories)
     }
 
     #[cfg(feature = "test-support")]
@@ -4170,6 +4197,7 @@ impl BackgroundScanner {
         log::debug!("rescanning paths {:?}", request.relative_paths);
 
         request.relative_paths.sort_unstable();
+        request.relative_paths.dedup();
         self.forcibly_load_paths(&request.relative_paths).await;
 
         let root_path = self.state.lock().await.snapshot.abs_path.clone();
@@ -4202,14 +4230,35 @@ impl BackgroundScanner {
             }
         }
 
-        self.reload_entries_for_paths(
-            &root_path,
-            &root_canonical_path,
-            &request.relative_paths,
-            abs_paths,
-            None,
-        )
-        .await;
+        if request.recursive {
+            let (scan_job_tx, scan_job_rx) = channel::unbounded();
+            self.reload_entries_for_paths(
+                &root_path,
+                &root_canonical_path,
+                &request.relative_paths,
+                abs_paths,
+                Some(scan_job_tx),
+            )
+            .await;
+            while let Ok(job) = scan_job_rx.recv().await {
+                self.scan_dir(&job).await.log_err();
+            }
+
+            let mut state = self.state.lock().await;
+            state.snapshot.completed_scan_id = state.snapshot.scan_id;
+            for (_, entry) in mem::take(&mut state.removed_entries) {
+                state.scanned_dirs.remove(&entry.id);
+            }
+        } else {
+            self.reload_entries_for_paths(
+                &root_path,
+                &root_canonical_path,
+                &request.relative_paths,
+                abs_paths,
+                None,
+            )
+            .await;
+        }
 
         self.send_status_update(scanning, request.done, &[]).await
     }
