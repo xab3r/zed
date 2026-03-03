@@ -366,6 +366,8 @@ actions!(
         ToggleHideGitIgnore,
         /// Toggles visibility of hidden files.
         ToggleHideHidden,
+        /// Reloads the project tree from disk.
+        Reload,
         /// Starts a new search in the selected directory.
         NewSearchInDirectory,
         /// Unfolds the selected directory.
@@ -478,6 +480,16 @@ pub fn init(cx: &mut App) {
                         .unwrap_or(false),
                 );
             })
+        });
+
+        workspace.register_action(|workspace, _: &Reload, window, cx| {
+            let project = workspace.project().clone();
+            ProjectPanel::reload_worktrees(&project, cx);
+            if let Some(panel) = workspace.panel::<ProjectPanel>(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.update_visible_entries(None, false, false, window, cx)
+                });
+            }
         });
 
         workspace.register_action(|workspace, action: &CollapseAllEntries, window, cx| {
@@ -1535,6 +1547,20 @@ impl ProjectPanel {
                 };
             });
 
+        self.update_visible_entries(None, false, false, window, cx);
+        cx.notify();
+    }
+
+    fn reload_worktrees(project: &Entity<Project>, cx: &App) {
+        for worktree in project.read(cx).visible_worktrees(cx) {
+            if let Some(local_worktree) = worktree.read(cx).as_local() {
+                drop(local_worktree.reload_filetree());
+            }
+        }
+    }
+
+    fn reload(&mut self, _: &Reload, window: &mut Window, cx: &mut Context<Self>) {
+        Self::reload_worktrees(&self.project, cx);
         self.update_visible_entries(None, false, false, window, cx);
         cx.notify();
     }
@@ -6463,6 +6489,7 @@ impl Render for ProjectPanel {
                 .on_action(cx.listener(Self::new_search_in_directory))
                 .on_action(cx.listener(Self::unfold_directory))
                 .on_action(cx.listener(Self::fold_directory))
+                .on_action(cx.listener(Self::reload))
                 .on_action(cx.listener(Self::remove_from_project))
                 .on_action(cx.listener(Self::compare_marked_files))
                 .when(!project.is_read_only(cx), |el| {
