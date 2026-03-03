@@ -1315,7 +1315,10 @@ impl Thread {
         self.ui_scroll_position
     }
 
-    pub fn set_ui_scroll_position(&mut self, position: Option<crate::db::SerializedScrollPosition>) {
+    pub fn set_ui_scroll_position(
+        &mut self,
+        position: Option<crate::db::SerializedScrollPosition>,
+    ) {
         self.ui_scroll_position = position;
     }
 
