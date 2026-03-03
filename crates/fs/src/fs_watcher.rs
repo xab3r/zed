@@ -79,6 +79,9 @@ impl Watcher for FsWatcher {
         }
 
         let root_path = SanitizedPath::new_arc(path);
+        let canonical_root_path = std::fs::canonicalize(path)
+            .ok()
+            .map(|canonical| SanitizedPath::new_arc(&canonical));
         let path: Arc<std::path::Path> = path.into();
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -102,7 +105,16 @@ impl Watcher for FsWatcher {
                         .iter()
                         .filter_map(|event_path| {
                             let event_path = SanitizedPath::new(event_path);
-                            event_path.starts_with(&root_path).then(|| PathEvent {
+                            let matches_root = event_path.starts_with(&root_path)
+                                || canonical_root_path
+                                    .as_ref()
+                                    .is_some_and(|canonical_root_path| {
+                                        event_path.starts_with(canonical_root_path)
+                                    });
+
+                            // macOS FsEventWatcher can emit symlink-resolved paths.
+                            // Keep events when either the configured or canonical root matches.
+                            matches_root.then(|| PathEvent {
                                 path: event_path.as_path().to_path_buf(),
                                 kind,
                             })
