@@ -348,6 +348,86 @@ async fn test_symlinks_pointing_outside(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+async fn test_reload_filetree_refreshes_loaded_symlinked_directories(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.background_executor.clone());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "dir1": {
+                "deps": {},
+            },
+            "dir3": {
+                "src": {
+                    "e.rs": "",
+                },
+            }
+        }),
+    )
+    .await;
+
+    fs.create_symlink("/root/dir1/deps/dep-dir3".as_ref(), "../../dir3".into())
+        .await
+        .unwrap();
+
+    let tree = Worktree::local(
+        Path::new("/root/dir1"),
+        true,
+        fs.clone(),
+        Default::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+
+    cx.read(|cx| tree.read(cx).as_local().unwrap().scan_complete())
+        .await;
+
+    tree.read_with(cx, |tree, _| {
+        tree.as_local()
+            .unwrap()
+            .refresh_entries_for_paths(vec![rel_path("deps/dep-dir3").into()])
+    })
+    .recv()
+    .await;
+    tree.read_with(cx, |tree, _| {
+        tree.as_local()
+            .unwrap()
+            .refresh_entries_for_paths(vec![rel_path("deps/dep-dir3/src").into()])
+    })
+    .recv()
+    .await;
+
+    tree.read_with(cx, |tree, _| {
+        assert!(
+            tree.entry_for_path(rel_path("deps/dep-dir3/src/new.rs"))
+                .is_none()
+        );
+    });
+
+    fs.save(
+        "/root/dir3/src/new.rs".as_ref(),
+        &"".into(),
+        text::LineEnding::Unix,
+    )
+    .await
+    .unwrap();
+
+    tree.read_with(cx, |tree, _| tree.as_local().unwrap().reload_filetree())
+        .recv()
+        .await;
+
+    tree.read_with(cx, |tree, _| {
+        assert!(
+            tree.entry_for_path(rel_path("deps/dep-dir3/src/new.rs"))
+                .is_some()
+        );
+    });
+}
+
 #[cfg(target_os = "macos")]
 #[gpui::test]
 async fn test_renaming_case_only(cx: &mut TestAppContext) {
