@@ -541,6 +541,9 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let project = workspace.read(cx).project().clone();
+        if project.read(cx).is_via_collab() {
+            return;
+        }
 
         cx.subscribe_in(
             &project,
@@ -607,6 +610,10 @@ impl Sidebar {
         old_paths: &WorktreePaths,
         cx: &mut Context<Self>,
     ) {
+        if project.read(cx).is_via_collab() {
+            return;
+        }
+
         let new_paths = project.read(cx).worktree_paths(cx);
         let old_folder_paths = old_paths.folder_path_list().clone();
 
@@ -2234,7 +2241,6 @@ impl Sidebar {
         let mut existing_panel = None;
         workspace.update(cx, |workspace, cx| {
             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                panel.update(cx, |panel, _cx| panel.begin_loading_thread());
                 existing_panel = Some(panel);
             }
         });
@@ -2262,7 +2268,6 @@ impl Sidebar {
                     workspace.add_panel(panel.clone(), window, cx);
                     panel.clone()
                 });
-                panel.update(cx, |panel, _cx| panel.begin_loading_thread());
                 load_thread(panel, &metadata, focus, window, cx);
                 if focus {
                     workspace.focus_panel::<AgentPanel>(window, cx);
@@ -4895,7 +4900,7 @@ fn all_thread_infos_for_workspace(
                 .read(cx)
                 .root_thread_has_pending_tool_call(cx);
             let conversation_thread_id = conversation_view.read(cx).parent_id();
-            let thread_view = conversation_view.read(cx).root_thread(cx)?;
+            let thread_view = conversation_view.read(cx).root_thread_view()?;
             let thread_view_ref = thread_view.read(cx);
             let thread = thread_view_ref.thread.read(cx);
 
@@ -5148,7 +5153,7 @@ fn dump_single_workspace(workspace: &Workspace, output: &mut String, cx: &gpui::
             )
             .ok();
             for (session_id, conversation_view) in background_threads {
-                if let Some(thread_view) = conversation_view.read(cx).root_thread(cx) {
+                if let Some(thread_view) = conversation_view.read(cx).root_thread_view() {
                     let thread = thread_view.read(cx).thread.read(cx);
                     let title = thread.title().unwrap_or_else(|| "(untitled)".into());
                     let status = match thread.status() {
