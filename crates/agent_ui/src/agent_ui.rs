@@ -112,6 +112,8 @@ actions!(
         OpenHistory,
         /// Adds a context server to the configuration.
         AddContextServer,
+        /// Archives the currently selected thread.
+        ArchiveSelectedThread,
         /// Removes the currently selected thread.
         RemoveSelectedThread,
         /// Starts a chat conversation with follow-up enabled.
@@ -200,6 +202,16 @@ actions!(
         ScrollOutputToNextMessage,
         /// Import agent threads from other Zed release channels (e.g. Preview, Nightly).
         ImportThreadsFromOtherChannels,
+    ]
+);
+
+actions!(
+    dev,
+    [
+        /// Shows metadata for the currently active thread.
+        ShowThreadMetadata,
+        /// Shows metadata for all threads in the sidebar.
+        ShowAllSidebarThreadMetadata,
     ]
 );
 
@@ -766,7 +778,7 @@ mod tests {
             flexible: true,
             default_width: px(300.),
             default_height: px(600.),
-            max_content_width: px(850.),
+            max_content_width: Some(px(850.)),
             default_model: None,
             inline_assistant_model: None,
             inline_assistant_use_streaming_tools: false,

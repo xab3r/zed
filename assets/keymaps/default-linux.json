@@ -385,6 +385,12 @@
     },
   },
   {
+    "context": "ThreadsArchiveView",
+    "bindings": {
+      "shift-backspace": "agent::ArchiveSelectedThread",
+    },
+  },
+  {
     "context": "RulesLibrary",
     "bindings": {
       "new": "rules_library::NewRule",
@@ -720,8 +726,9 @@
       "right": "menu::SelectChild",
       "enter": "menu::Confirm",
       "ctrl-f": "agents_sidebar::FocusSidebarFilter",
-      "ctrl-g": "agents_sidebar::ViewAllThreads",
-      "shift-backspace": "agent::RemoveSelectedThread",
+      "ctrl-g": "agents_sidebar::ToggleThreadHistory",
+      "shift-backspace": "agent::ArchiveSelectedThread",
+      "ctrl-backspace": "agent::RemoveSelectedThread",
       "ctrl-tab": "agents_sidebar::ToggleThreadSwitcher",
       "ctrl-shift-tab": ["agents_sidebar::ToggleThreadSwitcher", { "select_last": true }],
     },

@@ -47,7 +47,7 @@ use prompt_store::{
     WorktreeContext,
 };
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelSelection, update_settings_file};
+use settings::{LanguageModelSelection, Settings as _, update_settings_file};
 use std::any::Any;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -201,7 +201,7 @@ impl LanguageModels {
             .map(|provider| (provider.id(), provider.name(), provider.authenticate(cx)))
             .collect::<Vec<_>>();
 
-        cx.background_spawn(async move {
+        cx.spawn(async move |cx| {
             for (provider_id, provider_name, authenticate_task) in authenticate_all_providers {
                 if let Err(err) = authenticate_task.await {
                     match err {
@@ -244,6 +244,8 @@ impl LanguageModels {
                     }
                 }
             }
+
+            cx.update(language_models::update_environment_fallback_model);
         })
     }
 }
@@ -365,7 +367,7 @@ impl NativeAgent {
         });
 
         let registry = LanguageModelRegistry::read_global(cx);
-        let summarization_model = registry.thread_summary_model().map(|c| c.model);
+        let summarization_model = registry.thread_summary_model(cx).map(|c| c.model);
 
         let weak = cx.weak_entity();
         let weak_thread = thread_handle.downgrade();
@@ -749,13 +751,14 @@ impl NativeAgent {
 
         let registry = LanguageModelRegistry::read_global(cx);
         let default_model = registry.default_model().map(|m| m.model);
-        let summarization_model = registry.thread_summary_model().map(|m| m.model);
+        let summarization_model = registry.thread_summary_model(cx).map(|m| m.model);
 
         for session in self.sessions.values_mut() {
             session.thread.update(cx, |thread, cx| {
-                if thread.model().is_none()
-                    && let Some(model) = default_model.clone()
-                {
+                let should_update_model = thread.model().is_none()
+                    || (thread.is_empty()
+                        && matches!(event, language_model::Event::DefaultModelChanged));
+                if should_update_model && let Some(model) = default_model.clone() {
                     thread.set_model(model, cx);
                     cx.notify();
                 }
@@ -910,7 +913,7 @@ impl NativeAgent {
                     .get(&project_id)
                     .context("project state not found")?;
                 let summarization_model = LanguageModelRegistry::read_global(cx)
-                    .thread_summary_model()
+                    .thread_summary_model(cx)
                     .map(|c| c.model);
 
                 Ok(cx.new(|cx| {
@@ -1420,16 +1423,29 @@ impl acp_thread::AgentModelSelector for NativeAgentModelSelector {
             return Task::ready(Err(anyhow!("Invalid model ID {}", model_id)));
         };
 
-        // We want to reset the effort level when switching models, as the currently-selected effort level may
-        // not be compatible.
-        let effort = model
-            .default_effort_level()
-            .map(|effort_level| effort_level.value.to_string());
+        let favorite = agent_settings::AgentSettings::get_global(cx)
+            .favorite_models
+            .iter()
+            .find(|favorite| {
+                favorite.provider.0 == model.provider_id().0.as_ref()
+                    && favorite.model == model.id().0.as_ref()
+            })
+            .cloned();
+
+        let LanguageModelSelection {
+            enable_thinking,
+            effort,
+            speed,
+            ..
+        } = agent_settings::language_model_to_selection(&model, favorite.as_ref());
 
         thread.update(cx, |thread, cx| {
             thread.set_model(model.clone(), cx);
             thread.set_thinking_effort(effort.clone(), cx);
-            thread.set_thinking_enabled(model.supports_thinking(), cx);
+            thread.set_thinking_enabled(enable_thinking, cx);
+            if let Some(speed) = speed {
+                thread.set_speed(speed, cx);
+            }
         });
 
         update_settings_file(

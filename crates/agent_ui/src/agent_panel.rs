@@ -35,8 +35,8 @@ use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, CreateWorktree,
     Follow, InlineAssistant, LoadThreadFromClipboard, NewThread, NewWorktreeBranchTarget,
     OpenActiveThreadAsMarkdown, OpenAgentDiff, OpenHistory, ResetTrialEndUpsell, ResetTrialUpsell,
-    SwitchWorktree, ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
-    ToggleWorktreeSelector,
+    ShowAllSidebarThreadMetadata, ShowThreadMetadata, SwitchWorktree, ToggleNavigationMenu,
+    ToggleNewThreadMenu, ToggleOptionsMenu, ToggleWorktreeSelector,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
     thread_worktree_picker::ThreadWorktreePicker,
@@ -49,13 +49,14 @@ use crate::{
 use crate::{ExpandMessageEditor, ThreadHistoryView};
 use crate::{ManageProfiles, ThreadHistoryViewEvent};
 use crate::{ThreadHistory, agent_connection_store::AgentConnectionStore};
-use agent_settings::{AgentSettings, WindowLayout};
+use agent_settings::AgentSettings;
 use ai_onboarding::AgentPanelOnboarding;
 use anyhow::{Context as _, Result, anyhow};
+use chrono::{DateTime, Utc};
 use client::UserStore;
 use cloud_api_types::Plan;
 use collections::HashMap;
-use editor::Editor;
+use editor::{Editor, MultiBuffer};
 use extension::ExtensionEvents;
 use extension_host::ExtensionStore;
 use fs::Fs;
@@ -322,6 +323,24 @@ pub fn init(cx: &mut App) {
                         workspace.focus_panel::<AgentPanel>(window, cx);
                         panel.update(cx, |panel, cx| {
                             panel.load_thread_from_clipboard(window, cx);
+                        });
+                    }
+                })
+                .register_action(|workspace, _: &ShowThreadMetadata, window, cx| {
+                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                        panel.update(cx, |panel, cx| {
+                            panel.show_thread_metadata(&ShowThreadMetadata, window, cx);
+                        });
+                    }
+                })
+                .register_action(|workspace, _: &ShowAllSidebarThreadMetadata, window, cx| {
+                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                        panel.update(cx, |panel, cx| {
+                            panel.show_all_sidebar_thread_metadata(
+                                &ShowAllSidebarThreadMetadata,
+                                window,
+                                cx,
+                            );
                         });
                     }
                 })
@@ -624,6 +643,46 @@ fn build_conflicted_files_resolution_prompt(
     content
 }
 
+fn format_timestamp_human(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let duration = now.signed_duration_since(*dt);
+
+    let relative = if duration.num_seconds() < 0 {
+        "in the future".to_string()
+    } else if duration.num_seconds() < 60 {
+        let seconds = duration.num_seconds();
+        format!("{seconds} seconds ago")
+    } else if duration.num_minutes() < 60 {
+        let minutes = duration.num_minutes();
+        format!("{minutes} minutes ago")
+    } else if duration.num_hours() < 24 {
+        let hours = duration.num_hours();
+        format!("{hours} hours ago")
+    } else {
+        let days = duration.num_days();
+        format!("{days} days ago")
+    };
+
+    format!("{} ({})", dt.to_rfc3339(), relative)
+}
+
+/// Used for `dev: show thread metadata` action
+fn thread_metadata_to_debug_json(
+    metadata: &crate::thread_metadata_store::ThreadMetadata,
+) -> serde_json::Value {
+    serde_json::json!({
+        "thread_id": metadata.thread_id,
+        "session_id": metadata.session_id.as_ref().map(|s| s.0.to_string()),
+        "agent_id": metadata.agent_id.0.to_string(),
+        "title": metadata.title.as_ref().map(|t| t.to_string()),
+        "updated_at": format_timestamp_human(&metadata.updated_at),
+        "created_at": metadata.created_at.as_ref().map(format_timestamp_human),
+        "interacted_at": metadata.interacted_at.as_ref().map(format_timestamp_human),
+        "worktree_paths": format!("{:?}", metadata.worktree_paths),
+        "archived": metadata.archived,
+    })
+}
+
 pub(crate) struct AgentThread {
     conversation_view: Entity<ConversationView>,
 }
@@ -760,8 +819,6 @@ pub struct AgentPanel {
     pending_serialization: Option<Task<Result<()>>>,
     new_user_onboarding: Entity<AgentPanelOnboarding>,
     new_user_onboarding_upsell_dismissed: AtomicBool,
-    agent_layout_onboarding: Entity<ai_onboarding::AgentLayoutOnboarding>,
-    agent_layout_onboarding_dismissed: AtomicBool,
     selected_agent: Agent,
     worktree_creation_status: Option<(EntityId, WorktreeCreationStatus)>,
     _thread_view_subscription: Option<Subscription>,
@@ -1064,46 +1121,6 @@ impl AgentPanel {
             )
         });
 
-        let weak_panel = cx.entity().downgrade();
-
-        let layout = AgentSettings::get_layout(cx);
-        let is_agent_layout = matches!(layout, WindowLayout::Agent(_));
-
-        let agent_layout_onboarding = cx.new(|_cx| ai_onboarding::AgentLayoutOnboarding {
-            use_agent_layout: Arc::new({
-                let fs = fs.clone();
-                let weak_panel = weak_panel.clone();
-                move |_window, cx| {
-                    let _ = AgentSettings::set_layout(WindowLayout::Agent(None), fs.clone(), cx);
-                    weak_panel
-                        .update(cx, |panel, cx| {
-                            panel.dismiss_agent_layout_onboarding(cx);
-                        })
-                        .ok();
-                }
-            }),
-            revert_to_editor_layout: Arc::new({
-                let fs = fs.clone();
-                let weak_panel = weak_panel.clone();
-                move |_window, cx| {
-                    let _ = AgentSettings::set_layout(WindowLayout::Editor(None), fs.clone(), cx);
-                    weak_panel
-                        .update(cx, |panel, cx| {
-                            panel.dismiss_agent_layout_onboarding(cx);
-                        })
-                        .ok();
-                }
-            }),
-            dismissed: Arc::new(move |_window, cx| {
-                weak_panel
-                    .update(cx, |panel, cx| {
-                        panel.dismiss_agent_layout_onboarding(cx);
-                    })
-                    .ok();
-            }),
-            is_agent_layout,
-        });
-
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) = ExtensionEvents::try_global(cx)
         {
@@ -1168,7 +1185,6 @@ impl AgentPanel {
             zoomed: false,
             pending_serialization: None,
             new_user_onboarding: onboarding,
-            agent_layout_onboarding,
             thread_store,
             selected_agent: Agent::default(),
             worktree_creation_status: None,
@@ -1177,9 +1193,6 @@ impl AgentPanel {
             _worktree_creation_task: None,
             show_trust_workspace_message: false,
             new_user_onboarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
-            agent_layout_onboarding_dismissed: AtomicBool::new(AgentLayoutOnboarding::dismissed(
-                cx,
-            )),
             _base_view_observation: None,
             _draft_editor_observation: None,
         };
@@ -2025,6 +2038,108 @@ impl AgentPanel {
         .detach_and_log_err(cx);
     }
 
+    fn show_thread_metadata(
+        &mut self,
+        _: &ShowThreadMetadata,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(thread_id) = self.active_thread_id(cx) else {
+            Self::show_deferred_toast(&self.workspace, "No active thread", cx);
+            return;
+        };
+
+        let Some(store) = ThreadMetadataStore::try_global(cx) else {
+            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            return;
+        };
+
+        let Some(metadata) = store.read(cx).entry(thread_id).cloned() else {
+            Self::show_deferred_toast(&self.workspace, "No metadata found for active thread", cx);
+            return;
+        };
+
+        let json = thread_metadata_to_debug_json(&metadata);
+        let text = serde_json::to_string_pretty(&json).unwrap_or_default();
+        let title = format!("Thread Metadata: {}", metadata.display_title());
+
+        self.open_json_buffer(title, text, window, cx);
+    }
+
+    fn show_all_sidebar_thread_metadata(
+        &mut self,
+        _: &ShowAllSidebarThreadMetadata,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = ThreadMetadataStore::try_global(cx) else {
+            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            return;
+        };
+
+        let entries: Vec<serde_json::Value> = store
+            .read(cx)
+            .entries()
+            .filter(|t| !t.archived)
+            .map(thread_metadata_to_debug_json)
+            .collect();
+
+        let json = serde_json::Value::Array(entries);
+        let text = serde_json::to_string_pretty(&json).unwrap_or_default();
+
+        self.open_json_buffer("All Sidebar Thread Metadata".to_string(), text, window, cx);
+    }
+
+    fn open_json_buffer(
+        &self,
+        title: String,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let json_language = self.language_registry.language_for_name("JSON");
+        let project = self.project.clone();
+        let workspace = self.workspace.clone();
+
+        window
+            .spawn(cx, async move |cx| {
+                let json_language = json_language.await.ok();
+
+                let buffer = project
+                    .update(cx, |project, cx| {
+                        project.create_buffer(json_language, false, cx)
+                    })
+                    .await?;
+
+                buffer.update(cx, |buffer, cx| {
+                    buffer.set_text(text, cx);
+                    buffer.set_capability(language::Capability::ReadWrite, cx);
+                });
+
+                workspace.update_in(cx, |workspace, window, cx| {
+                    let buffer =
+                        cx.new(|cx| MultiBuffer::singleton(buffer, cx).with_title(title.clone()));
+
+                    workspace.add_item_to_active_pane(
+                        Box::new(cx.new(|cx| {
+                            let mut editor =
+                                Editor::for_multibuffer(buffer, Some(project.clone()), window, cx);
+                            editor.set_breadcrumb_header(title);
+                            editor.disable_mouse_wheel_zoom();
+                            editor
+                        })),
+                        None,
+                        true,
+                        window,
+                        cx,
+                    );
+                })?;
+
+                anyhow::Ok(())
+            })
+            .detach_and_log_err(cx);
+    }
+
     fn handle_agent_configuration_event(
         &mut self,
         _entity: &Entity<AgentConfiguration>,
@@ -2445,7 +2560,7 @@ impl AgentPanel {
                 &tv,
                 window,
                 |this, _view, event: &AcpThreadViewEvent, _window, cx| match event {
-                    AcpThreadViewEvent::MessageSentOrQueued => {
+                    AcpThreadViewEvent::Interacted => {
                         let Some(thread_id) = this.active_thread_id(cx) else {
                             return;
                         };
@@ -2457,7 +2572,7 @@ impl AgentPanel {
                             this._draft_editor_observation = None;
                         }
                         this.retained_threads.remove(&thread_id);
-                        cx.emit(AgentPanelEvent::MessageSentOrQueued { thread_id });
+                        cx.emit(AgentPanelEvent::ThreadInteracted { thread_id });
                     }
                 },
             )
@@ -3276,26 +3391,6 @@ impl AgentPanel {
             return;
         }
 
-        let (worktree_receivers, worktree_directory_setting) =
-            if matches!(args, WorktreeCreationArgs::New { .. }) {
-                (
-                    Some(
-                        git_repos
-                            .iter()
-                            .map(|repo| repo.update(cx, |repo, _cx| repo.worktrees()))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Some(
-                        ProjectSettings::get_global(cx)
-                            .git
-                            .worktree_directory
-                            .clone(),
-                    ),
-                )
-            } else {
-                (None, None)
-            };
-
         let remote_connection_options = self.project.read(cx).remote_connection_options(cx);
 
         if remote_connection_options.is_some() {
@@ -3332,10 +3427,18 @@ impl AgentPanel {
                     worktree_name,
                     branch_target,
                 } => {
-                    let worktree_receivers = worktree_receivers
-                        .expect("worktree receivers must be prepared for new worktree creation");
-                    let worktree_directory_setting = worktree_directory_setting
-                        .expect("worktree directory must be prepared for new worktree creation");
+                    let worktree_receivers: Vec<_> = this.update_in(cx, |_this, _window, cx| {
+                        git_repos
+                            .iter()
+                            .map(|repo| repo.update(cx, |repo, _cx| repo.worktrees()))
+                            .collect()
+                    })?;
+                    let worktree_directory_setting = this.update_in(cx, |_this, _window, cx| {
+                        ProjectSettings::get_global(cx)
+                            .git
+                            .worktree_directory
+                            .clone()
+                    })?;
 
                     let mut existing_worktree_names = Vec::new();
                     let mut existing_worktree_paths = HashSet::default();
@@ -3740,7 +3843,7 @@ pub enum AgentPanelEvent {
     ActiveViewChanged,
     ThreadFocused,
     RetainedThreadChanged,
-    MessageSentOrQueued { thread_id: ThreadId },
+    ThreadInteracted { thread_id: ThreadId },
 }
 
 impl EventEmitter<PanelEvent> for AgentPanel {}
@@ -3989,12 +4092,14 @@ impl AgentPanel {
             BaseView::AgentThread { conversation_view } => Some(conversation_view.clone()),
             _ => None,
         };
-        let thread_with_messages = match &self.base_view {
-            BaseView::AgentThread { conversation_view } => {
-                conversation_view.read(cx).has_user_submitted_prompt(cx)
-            }
-            _ => false,
-        };
+
+        let can_regenerate_thread_title =
+            conversation_view.as_ref().is_some_and(|conversation_view| {
+                let conversation_view = conversation_view.read(cx);
+                conversation_view.has_user_submitted_prompt(cx)
+                    && conversation_view.as_native_thread(cx).is_some()
+            });
+
         let has_auth_methods = match &self.base_view {
             BaseView::AgentThread { conversation_view } => {
                 conversation_view.read(cx).has_auth_methods()
@@ -4025,7 +4130,7 @@ impl AgentPanel {
                     Some(ContextMenu::build(window, cx, |mut menu, _window, _| {
                         menu = menu.context(focus_handle.clone());
 
-                        if thread_with_messages {
+                        if can_regenerate_thread_title {
                             menu = menu.header("Current Thread");
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
@@ -4159,7 +4264,7 @@ impl AgentPanel {
             let current_path = &repo.work_directory_abs_path;
 
             return linked_worktree_short_name(main_path, current_path)
-                .unwrap_or_else(|| "main".into());
+                .unwrap_or_else(|| "main worktree".into());
         }
 
         project
@@ -4527,9 +4632,8 @@ impl AgentPanel {
 
         let base_container = h_flex()
             .size_full()
-            // TODO: This is only until we remove Agent settings from the panel.
             .when(!is_in_history_or_config, |this| {
-                this.max_w(max_content_width).mx_auto()
+                this.when_some(max_content_width, |this, max_w| this.max_w(max_w).mx_auto())
             })
             .flex_none()
             .justify_between()
@@ -4737,56 +4841,10 @@ impl AgentPanel {
         plan.is_some_and(|plan| plan == Plan::ZedFree) && has_previous_trial
     }
 
-    fn should_render_agent_layout_onboarding(&self, cx: &mut Context<Self>) -> bool {
-        // We only want to show this for existing users: those who
-        // have used the agent panel before the sidebar was introduced.
-        // We can infer that state by users having seen the onboarding
-        // at one point, but not the agent layout onboarding.
-
-        let has_messages = self.active_thread_has_messages(cx);
-        let is_dismissed = self
-            .agent_layout_onboarding_dismissed
-            .load(Ordering::Acquire);
-
-        if is_dismissed || has_messages {
-            return false;
-        }
-
-        match &self.base_view {
-            BaseView::Uninitialized => false,
-            BaseView::AgentThread { .. } => {
-                let existing_user = self
-                    .new_user_onboarding_upsell_dismissed
-                    .load(Ordering::Acquire);
-                existing_user
-            }
-        }
-    }
-
-    fn render_agent_layout_onboarding(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        if !self.should_render_agent_layout_onboarding(cx) {
-            return None;
-        }
-
-        Some(div().child(self.agent_layout_onboarding.clone()))
-    }
-
-    fn dismiss_agent_layout_onboarding(&mut self, cx: &mut Context<Self>) {
-        self.agent_layout_onboarding_dismissed
-            .store(true, Ordering::Release);
-        AgentLayoutOnboarding::set_dismissed(true, cx);
-        cx.notify();
-    }
-
     fn dismiss_ai_onboarding(&mut self, cx: &mut Context<Self>) {
         self.new_user_onboarding_upsell_dismissed
             .store(true, Ordering::Release);
         OnboardingUpsell::set_dismissed(true, cx);
-        self.dismiss_agent_layout_onboarding(cx);
         cx.notify();
     }
 
@@ -5048,7 +5106,6 @@ impl Render for AgentPanel {
             .child(self.render_toolbar(window, cx))
             .children(self.render_workspace_trust_message(cx))
             .children(self.render_new_user_onboarding(window, cx))
-            .children(self.render_agent_layout_onboarding(window, cx))
             .map(|parent| match self.visible_surface() {
                 VisibleSurface::Uninitialized => parent,
                 VisibleSurface::AgentThread(conversation_view) => parent
@@ -5137,12 +5194,6 @@ struct OnboardingUpsell;
 
 impl Dismissable for OnboardingUpsell {
     const KEY: &'static str = "dismissed-trial-upsell";
-}
-
-struct AgentLayoutOnboarding;
-
-impl Dismissable for AgentLayoutOnboarding {
-    const KEY: &'static str = "dismissed-agent-layout-onboarding";
 }
 
 struct TrialEndUpsell;

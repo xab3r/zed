@@ -62,7 +62,7 @@ macro_rules! concat_sections {
 }
 
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
-    vec![
+    let mut pages = vec![
         general_page(cx),
         appearance_page(),
         keymap_page(),
@@ -77,7 +77,32 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         collaboration_page(),
         ai_page(cx),
         network_page(),
-    ]
+    ];
+
+    use feature_flags::FeatureFlagAppExt as _;
+    if cx.is_staff() || cfg!(debug_assertions) {
+        pages.push(developer_page());
+    }
+
+    pages
+}
+
+fn developer_page() -> SettingsPage {
+    SettingsPage {
+        title: "Developer",
+        items: Box::new([
+            SettingsPageItem::SectionHeader("Feature Flags"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Feature Flags".into(),
+                r#type: Default::default(),
+                description: None,
+                json_path: Some("feature_flags"),
+                in_json: true,
+                files: USER,
+                render: crate::pages::render_feature_flags_page,
+            }),
+        ]),
+    }
 }
 
 fn general_page(cx: &App) -> SettingsPage {
@@ -5811,23 +5836,58 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Max Content Width",
-                description: "Maximum content width in pixels. Content will be centered when the panel is wider than this value.",
-                field: Box::new(SettingField {
-                    json_path: Some("agent.max_content_width"),
-                    pick: |settings_content| {
-                        settings_content.agent.as_ref()?.max_content_width.as_ref()
-                    },
-                    write: |settings_content, value| {
-                        settings_content
-                            .agent
-                            .get_or_insert_default()
-                            .max_content_width = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER,
+                    title: "Limit Content Width",
+                    description: "Whether to constrain the agent panel content to a maximum width, centering it when the panel is wider, for optimal readability.",
+                    field: Box::new(SettingField::<bool> {
+                        json_path: Some("agent.limit_content_width"),
+                        pick: |settings_content| {
+                            settings_content
+                                .agent
+                                .as_ref()?
+                                .limit_content_width
+                                .as_ref()
+                        },
+                        write: |settings_content, value| {
+                            settings_content
+                                .agent
+                                .get_or_insert_default()
+                                .limit_content_width = value;
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    let enabled = settings_content
+                        .agent
+                        .as_ref()?
+                        .limit_content_width
+                        .unwrap_or(true);
+                    Some(if enabled { 1 } else { 0 })
+                },
+                fields: vec![
+                    vec![],
+                    vec![SettingItem {
+                        files: USER,
+                        title: "Max Content Width",
+                        description: "Maximum content width in pixels. Content will be centered when the panel is wider than this value.",
+                        field: Box::new(SettingField {
+                            json_path: Some("agent.max_content_width"),
+                            pick: |settings_content| {
+                                settings_content.agent.as_ref()?.max_content_width.as_ref()
+                            },
+                            write: |settings_content, value| {
+                                settings_content
+                                    .agent
+                                    .get_or_insert_default()
+                                    .max_content_width = value;
+                            },
+                        }),
+                        metadata: None,
+                    }],
+                ],
             }),
         ]
     }

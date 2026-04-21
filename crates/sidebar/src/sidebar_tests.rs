@@ -147,11 +147,6 @@ fn assert_remote_project_integration_sidebar_state(
                     title
                 );
             }
-            ListEntry::ViewMore { .. } => {
-                panic!(
-                    "unexpected `View More` entry while simulating remote project integration flicker"
-                );
-            }
         }
     }
 
@@ -454,9 +449,12 @@ fn format_linked_worktree_chips(worktrees: &[ThreadItemWorktreeInfo]) -> String 
         if wt.kind == ui::WorktreeKind::Main {
             continue;
         }
-        if !seen.contains(&wt.name) {
-            seen.push(wt.name.clone());
-            chips.push(format!("{{{}}}", wt.name));
+        let Some(name) = wt.worktree_name.as_ref() else {
+            continue;
+        };
+        if !seen.contains(name) {
+            seen.push(name.clone());
+            chips.push(format!("{{{}}}", name));
         }
     }
     if chips.is_empty() {
@@ -519,15 +517,6 @@ fn visible_entries_as_strings(
                             format!("  {title}{worktree}{live}{status_str}{notified}{selected}")
                         }
                     }
-                    ListEntry::ViewMore {
-                        is_fully_expanded, ..
-                    } => {
-                        if *is_fully_expanded {
-                            format!("  - Collapse{}", selected)
-                        } else {
-                            format!("  + View More{}", selected)
-                        }
-                    }
                 }
             })
             .collect()
@@ -545,7 +534,7 @@ async fn test_serialization_round_trip(cx: &mut TestAppContext) {
 
     let project_group_key = project.read_with(cx, |project, cx| project.project_group_key(cx));
 
-    // Set a custom width, collapse the group, and expand "View More".
+    // Set a custom width and collapse the group.
     sidebar.update_in(cx, |sidebar, window, cx| {
         sidebar.set_width(Some(px(420.0)), cx);
         sidebar.toggle_collapse(&project_group_key, window, cx);
@@ -587,7 +576,7 @@ async fn test_restore_serialized_archive_view_does_not_panic(cx: &mut TestAppCon
 
     let serialized = serde_json::to_string(&SerializedSidebar {
         width: Some(400.0),
-        active_view: SerializedSidebarView::Archive,
+        active_view: SerializedSidebarView::History,
     })
     .expect("serialization should succeed");
 
@@ -731,101 +720,6 @@ async fn test_workspace_lifecycle(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_view_more_pagination(cx: &mut TestAppContext) {
-    let project = init_test_project("/my-project", cx).await;
-    let (multi_workspace, cx) =
-        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-    let sidebar = setup_sidebar(&multi_workspace, cx);
-
-    save_n_test_threads(12, &project, cx).await;
-
-    multi_workspace.update_in(cx, |_, _window, cx| cx.notify());
-    cx.run_until_parked();
-
-    assert_eq!(
-        visible_entries_as_strings(&sidebar, cx),
-        vec![
-            //
-            "v [my-project]",
-            "  Thread 12",
-            "  Thread 11",
-            "  Thread 10",
-            "  Thread 9",
-            "  Thread 8",
-            "  + View More",
-        ]
-    );
-}
-
-#[gpui::test]
-async fn test_view_more_batched_expansion(cx: &mut TestAppContext) {
-    let project = init_test_project("/my-project", cx).await;
-    let (multi_workspace, cx) =
-        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-    let sidebar = setup_sidebar(&multi_workspace, cx);
-
-    // Create 17 threads: initially shows 5, then 10, then 15, then all 17 with Collapse
-    save_n_test_threads(17, &project, cx).await;
-
-    let project_group_key = project.read_with(cx, |project, cx| project.project_group_key(cx));
-
-    multi_workspace.update_in(cx, |_, _window, cx| cx.notify());
-    cx.run_until_parked();
-
-    // Initially shows 5 threads + View More
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 7); // header + 5 threads + View More
-    assert!(entries.iter().any(|e| e.contains("View More")));
-
-    // Focus and navigate to View More, then confirm to expand by one batch
-    focus_sidebar(&sidebar, cx);
-    for _ in 0..7 {
-        cx.dispatch_action(SelectNext);
-    }
-    cx.dispatch_action(Confirm);
-    cx.run_until_parked();
-
-    // Now shows 10 threads + View More
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 12); // header + 10 threads + View More
-    assert!(entries.iter().any(|e| e.contains("View More")));
-
-    // Expand again by one batch
-    sidebar.update_in(cx, |s, _window, cx| {
-        s.expand_thread_group(&project_group_key, cx);
-    });
-    cx.run_until_parked();
-
-    // Now shows 15 threads + View More
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 17); // header + 15 threads + View More
-    assert!(entries.iter().any(|e| e.contains("View More")));
-
-    // Expand one more time - should show all 17 threads with Collapse button
-    sidebar.update_in(cx, |s, _window, cx| {
-        s.expand_thread_group(&project_group_key, cx);
-    });
-    cx.run_until_parked();
-
-    // All 17 threads shown with Collapse button
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 19); // header + 17 threads + Collapse
-    assert!(!entries.iter().any(|e| e.contains("View More")));
-    assert!(entries.iter().any(|e| e.contains("Collapse")));
-
-    // Click collapse - should go back to showing 5 threads
-    sidebar.update_in(cx, |s, _window, cx| {
-        s.reset_thread_group_expansion(&project_group_key, cx);
-    });
-    cx.run_until_parked();
-
-    // Back to initial state: 5 threads + View More
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 7); // header + 5 threads + View More
-    assert!(entries.iter().any(|e| e.contains("View More")));
-}
-
-#[gpui::test]
 async fn test_collapse_and_expand_group(cx: &mut TestAppContext) {
     let project = init_test_project("/my-project", cx).await;
     let (multi_workspace, cx) =
@@ -948,7 +842,6 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             key: ProjectGroupKey::new(None, collapsed_path.clone()),
             workspaces: Vec::new(),
             expanded: false,
-            visible_thread_count: None,
         });
     });
 
@@ -1092,11 +985,6 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
             }),
-            // View More entry
-            ListEntry::ViewMore {
-                key: ProjectGroupKey::new(None, expanded_path.clone()),
-                is_fully_expanded: false,
-            },
             // Collapsed project header
             ListEntry::ProjectHeader {
                 key: ProjectGroupKey::new(None, collapsed_path.clone()),
@@ -1123,14 +1011,13 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             "  Error thread * (error)",
             "  Waiting thread (waiting)",
             "  Notified thread * (!)",
-            "  + View More",
             "> [collapsed-project]",
         ]
     );
 
     // Move selection to the collapsed header
     sidebar.update_in(cx, |s, _window, _cx| {
-        s.selection = Some(7);
+        s.selection = Some(6);
     });
 
     assert_eq!(
@@ -1317,40 +1204,6 @@ async fn test_keyboard_confirm_on_project_header_toggles_collapse(cx: &mut TestA
             "  Thread 1",
         ]
     );
-}
-
-#[gpui::test]
-async fn test_keyboard_confirm_on_view_more_expands(cx: &mut TestAppContext) {
-    let project = init_test_project("/my-project", cx).await;
-    let (multi_workspace, cx) =
-        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-    let sidebar = setup_sidebar(&multi_workspace, cx);
-
-    save_n_test_threads(8, &project, cx).await;
-    multi_workspace.update_in(cx, |_, _window, cx| cx.notify());
-    cx.run_until_parked();
-
-    // Should show header + 5 threads + "View More"
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 7);
-    assert!(entries.iter().any(|e| e.contains("View More")));
-
-    // Focus sidebar (selection starts at None), then navigate down to the "View More" entry (index 6)
-    focus_sidebar(&sidebar, cx);
-    for _ in 0..7 {
-        cx.dispatch_action(SelectNext);
-    }
-    assert_eq!(sidebar.read_with(cx, |s, _| s.selection), Some(6));
-
-    // Confirm on "View More" to expand
-    cx.dispatch_action(Confirm);
-    cx.run_until_parked();
-
-    // All 8 threads should now be visible with a "Collapse" button
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(entries.len(), 10); // header + 8 threads + Collapse button
-    assert!(!entries.iter().any(|e| e.contains("View More")));
-    assert!(entries.iter().any(|e| e.contains("Collapse")));
 }
 
 #[gpui::test]
@@ -2091,61 +1944,6 @@ async fn test_search_matches_workspace_name(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_search_finds_threads_hidden_behind_view_more(cx: &mut TestAppContext) {
-    let project = init_test_project("/my-project", cx).await;
-    let (multi_workspace, cx) =
-        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-    let sidebar = setup_sidebar(&multi_workspace, cx);
-
-    // Create 8 threads. The oldest one has a unique name and will be
-    // behind View More (only 5 shown by default).
-    for i in 0..8u32 {
-        let title = if i == 0 {
-            "Hidden gem thread".to_string()
-        } else {
-            format!("Thread {}", i + 1)
-        };
-        save_thread_metadata(
-            acp::SessionId::new(Arc::from(format!("thread-{}", i))),
-            Some(title.into()),
-            chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, i).unwrap(),
-            None,
-            None,
-            &project,
-            cx,
-        )
-    }
-    cx.run_until_parked();
-
-    // Confirm the thread is not visible and View More is shown.
-    let entries = visible_entries_as_strings(&sidebar, cx);
-    assert!(
-        entries.iter().any(|e| e.contains("View More")),
-        "should have View More button"
-    );
-    assert!(
-        !entries.iter().any(|e| e.contains("Hidden gem")),
-        "Hidden gem should be behind View More"
-    );
-
-    // User searches for the hidden thread — it appears, and View More is gone.
-    type_in_search(&sidebar, "hidden gem", cx);
-    let filtered = visible_entries_as_strings(&sidebar, cx);
-    assert_eq!(
-        filtered,
-        vec![
-            //
-            "v [my-project]",
-            "  Hidden gem thread  <== selected",
-        ]
-    );
-    assert!(
-        !filtered.iter().any(|e| e.contains("View More")),
-        "View More should not appear when filtering"
-    );
-}
-
-#[gpui::test]
 async fn test_search_finds_threads_inside_collapsed_groups(cx: &mut TestAppContext) {
     let project = init_test_project("/my-project", cx).await;
     let (multi_workspace, cx) =
@@ -2454,7 +2252,6 @@ async fn test_confirm_on_historical_thread_in_new_project_group_opens_real_threa
             key: project_b_key.clone(),
             workspaces: Vec::new(),
             expanded: true,
-            visible_thread_count: None,
         });
     });
 
@@ -4043,7 +3840,10 @@ async fn test_clicking_worktree_thread_does_not_briefly_render_as_separate_proje
                 }
                 ListEntry::Thread(thread)
                     if thread.metadata.title.as_ref().map(|t| t.as_ref()) == Some("WT Thread")
-                        && thread.worktrees.first().map(|wt| wt.name.as_ref())
+                        && thread
+                            .worktrees
+                            .first()
+                            .and_then(|wt| wt.worktree_name.as_ref().map(|n| n.as_ref()))
                             == Some("wt-feature-a") =>
                 {
                     saw_expected_thread = true;
@@ -4053,15 +3853,12 @@ async fn test_clicking_worktree_thread_does_not_briefly_render_as_separate_proje
                     let worktree_name = thread
                         .worktrees
                         .first()
-                        .map(|wt| wt.name.as_ref())
+                        .and_then(|wt| wt.worktree_name.as_ref().map(|n| n.as_ref()))
                         .unwrap_or("<none>");
                     panic!(
                         "unexpected sidebar thread while opening linked worktree thread: title=`{}`, worktree=`{}`",
                         title, worktree_name
                     );
-                }
-                ListEntry::ViewMore { .. } => {
-                    panic!("unexpected `View More` entry while opening linked worktree thread");
                 }
             }
         }
@@ -10635,7 +10432,7 @@ fn test_worktree_info_branch_names_for_main_worktrees() {
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].kind, ui::WorktreeKind::Main);
     assert_eq!(infos[0].branch_name, Some(SharedString::from("feature-x")));
-    assert_eq!(infos[0].name, SharedString::from("myapp"));
+    assert_eq!(infos[0].worktree_name, Some(SharedString::from("myapp")));
 }
 
 #[test]
@@ -10672,7 +10469,7 @@ fn test_worktree_info_missing_branch_returns_none() {
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].kind, ui::WorktreeKind::Main);
     assert_eq!(infos[0].branch_name, None);
-    assert_eq!(infos[0].name, SharedString::from("myapp"));
+    assert_eq!(infos[0].worktree_name, Some(SharedString::from("myapp")));
 }
 
 #[gpui::test]
@@ -11043,4 +10840,130 @@ async fn test_collab_guest_move_thread_paths_is_noop(cx: &mut TestAppContext) {
             "thread path must not change when project is via collab"
         );
     });
+}
+
+#[gpui::test]
+async fn test_cmd_click_project_header_returns_to_last_active_linked_worktree_workspace(
+    cx: &mut TestAppContext,
+) {
+    // Regression test for: cmd-clicking a project group header should return
+    // the user to the workspace they most recently had active in that group,
+    // including workspaces rooted at a linked worktree.
+    init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+
+    fs.insert_tree(
+        "/project-a",
+        serde_json::json!({
+            ".git": {},
+            "src": {},
+        }),
+    )
+    .await;
+    fs.insert_tree("/project-b", serde_json::json!({ "src": {} }))
+        .await;
+
+    fs.add_linked_worktree_for_repo(
+        Path::new("/project-a/.git"),
+        false,
+        git::repository::Worktree {
+            path: std::path::PathBuf::from("/wt-feature-a"),
+            ref_name: Some("refs/heads/feature-a".into()),
+            sha: "aaa".into(),
+            is_main: false,
+            is_bare: false,
+        },
+    )
+    .await;
+
+    cx.update(|cx| <dyn fs::Fs>::set_global(fs.clone(), cx));
+
+    let main_project_a = project::Project::test(fs.clone(), ["/project-a".as_ref()], cx).await;
+    let worktree_project_a =
+        project::Project::test(fs.clone(), ["/wt-feature-a".as_ref()], cx).await;
+    let project_b = project::Project::test(fs.clone(), ["/project-b".as_ref()], cx).await;
+
+    main_project_a
+        .update(cx, |p, cx| p.git_scans_complete(cx))
+        .await;
+    worktree_project_a
+        .update(cx, |p, cx| p.git_scans_complete(cx))
+        .await;
+
+    // The multi-workspace starts with the main-paths workspace of group A
+    // as the initially active workspace.
+    let (multi_workspace, cx) = cx
+        .add_window_view(|window, cx| MultiWorkspace::test_new(main_project_a.clone(), window, cx));
+
+    let sidebar = setup_sidebar(&multi_workspace, cx);
+
+    // Capture the initially active workspace (group A's main-paths workspace)
+    // *before* registering additional workspaces, since `workspaces()` returns
+    // retained workspaces in registration order — not activation order — and
+    // the multi-workspace's starting workspace may not be retained yet.
+    let main_workspace_a = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+    // Register the linked-worktree workspace (group A) and the group-B
+    // workspace. Both get retained by the multi-workspace.
+    let worktree_workspace_a = multi_workspace.update_in(cx, |mw, window, cx| {
+        mw.test_add_workspace(worktree_project_a.clone(), window, cx)
+    });
+    let workspace_b = multi_workspace.update_in(cx, |mw, window, cx| {
+        mw.test_add_workspace(project_b.clone(), window, cx)
+    });
+
+    cx.run_until_parked();
+
+    // Step 1: activate the linked-worktree workspace. The MultiWorkspace
+    // records this as the last-active workspace for group A on its
+    // ProjectGroupState. (We don't assert on the initial active workspace
+    // because `test_add_workspace` may auto-activate newly registered
+    // workspaces — what matters for this test is the explicit sequence of
+    // activations below.)
+    multi_workspace.update_in(cx, |mw, window, cx| {
+        mw.activate(worktree_workspace_a.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        multi_workspace.read_with(cx, |mw, _| mw.workspace().clone()),
+        worktree_workspace_a,
+        "linked-worktree workspace should be active after step 1"
+    );
+
+    // Step 2: switch to the workspace for group B. Group A's last-active
+    // workspace remains the linked-worktree one (group B getting activated
+    // records *its own* last-active workspace, not group A's).
+    multi_workspace.update_in(cx, |mw, window, cx| {
+        mw.activate(workspace_b.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        multi_workspace.read_with(cx, |mw, _| mw.workspace().clone()),
+        workspace_b,
+        "group B's workspace should be active after step 2"
+    );
+
+    // Step 3: simulate cmd-click on group A's header. The project group key
+    // for group A is derived from the *main-paths* workspace (linked-worktree
+    // workspaces share the same key because it normalizes to main-worktree
+    // paths).
+    let group_a_key = main_workspace_a.read_with(cx, |ws, cx| ws.project_group_key(cx));
+    sidebar.update_in(cx, |sidebar, window, cx| {
+        sidebar.activate_or_open_workspace_for_group(&group_a_key, window, cx);
+    });
+    cx.run_until_parked();
+
+    // Expected: we're back in the linked-worktree workspace, not the
+    // main-paths one.
+    let active_after_cmd_click = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+    assert_eq!(
+        active_after_cmd_click, worktree_workspace_a,
+        "cmd-click on group A's header should return to the last-active \
+         linked-worktree workspace, not the main-paths workspace"
+    );
+    assert_ne!(
+        active_after_cmd_click, main_workspace_a,
+        "cmd-click must not fall back to the main-paths workspace when a \
+         linked-worktree workspace was the last-active one for the group"
+    );
 }
