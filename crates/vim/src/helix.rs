@@ -1410,21 +1410,23 @@ impl Vim {
 
     /// Assign labels for the deterministic algorithm.
     ///
-    /// The first two characters of every label echo the word's first two
-    /// characters. When multiple words share the same first two characters,
-    /// the third character is chosen as a discriminator, with the priorities:
+    /// All labels share a single length, picked globally based on conflicts:
     ///
-    /// 1. The word's actual third character — if no earlier candidate in
-    ///    this prefix group has already claimed it. The first occurrence of
-    ///    each 3rd char wins; later duplicates fall through.
-    /// 2. The word's second character — if no other label in the group has
-    ///    already taken it.
-    /// 3. A fallback from [`DETERMINISTIC_FALLBACK_CHARS`].
-    /// 4. Any remaining ASCII letter.
+    /// **Stage 1** — 3-char labels `c1 c2 own_c3`. Used when every `(c1, c2)`
+    /// group has all-distinct natural 3rd chars.
     ///
-    /// If three characters still aren't enough to disambiguate (more than 26
-    /// candidates share the same prefix and discriminator pool), a fourth
-    /// character is appended from the fallback alphabet.
+    /// **Stage 2** — 4-char labels `c1 c2 own_c3 D`. Used when Stage 1 has
+    /// conflicts (some group shares a 3rd char) but every `(c1, c2, c3)`
+    /// sub-group still has all-distinct natural 4th chars. `D` is picked at
+    /// position 4 with the same priority chain as Stage 1's 3rd char:
+    /// own 4th char (first occurrence wins) → `c3` → fallback chars → any
+    /// remaining letter.
+    ///
+    /// **Stage 3** — 4-char labels `c1 c2 D1 D2`, where `(D1, D2)` is a
+    /// sequential 2-char uniqueness factor assigned per group. Used when
+    /// Stage 2 still has conflicts (some sub-group shares a 4th char). The
+    /// match prefix shrinks back to 2 chars to make room for a wider
+    /// discriminator pool (26 × 26).
     fn assign_deterministic_labels(candidates: &[JumpCandidate]) -> Vec<Vec<char>> {
         let mut labels: Vec<Vec<char>> = vec![Vec::new(); candidates.len()];
 
@@ -1442,79 +1444,155 @@ impl Vim {
             groups.entry((c1.ch, c2.ch)).or_default().push(idx);
         }
 
-        for ((c1, c2), indices) in groups {
-            let prefix = vec![c1, c2];
-
-            if indices.len() == 1 {
-                let idx = indices[0];
-                let candidate = &candidates[idx];
-                let mut label = prefix.clone();
-                if let Some(third) = candidate.word_chars.get(2) {
-                    label.push(third.ch);
-                }
-                labels[idx] = label;
-                continue;
-            }
-
-            let third_chars = Self::pick_deterministic_thirds(&indices, candidates, c1, c2);
-
-            for (idx, third) in indices.iter().zip(third_chars.iter()) {
-                let mut label = prefix.clone();
-                label.push(*third);
-                labels[*idx] = label;
-            }
-
-            // If two candidates ended up with identical 3-char labels (the
-            // group is so large the discriminator pool ran out), append a
-            // 4th character to break ties.
-            Self::extend_colliding_labels_with_fourth_char(&indices, &mut labels);
+        match Self::deterministic_stage(&groups, candidates) {
+            DeterministicStage::One => Self::assign_stage_one_labels(&groups, candidates, &mut labels),
+            DeterministicStage::Two => Self::assign_stage_two_labels(&groups, candidates, &mut labels),
+            DeterministicStage::Three => Self::assign_stage_three_labels(&groups, &mut labels),
         }
 
         labels
     }
 
-    fn pick_deterministic_thirds(
+    /// Pick the global label-length stage. Escalation triggers as soon as a
+    /// single group (Stage 1) or sub-group (Stage 2) has two candidates
+    /// sharing the relevant char; missing chars (e.g. word shorter than the
+    /// position) count as their own value, so two short words sharing a
+    /// prefix also collide.
+    fn deterministic_stage(
+        groups: &HashMap<(char, char), Vec<usize>>,
+        candidates: &[JumpCandidate],
+    ) -> DeterministicStage {
+        let stage_one_ok = groups.values().all(|indices| {
+            let mut seen: HashSet<Option<char>> = HashSet::default();
+            indices
+                .iter()
+                .all(|&idx| seen.insert(candidates[idx].word_chars.get(2).map(|wc| wc.ch)))
+        });
+        if stage_one_ok {
+            return DeterministicStage::One;
+        }
+
+        let stage_two_ok = groups.values().all(|indices| {
+            let mut sub_groups: HashMap<char, Vec<usize>> = HashMap::default();
+            for &idx in indices {
+                if let Some(c3) = candidates[idx].word_chars.get(2) {
+                    sub_groups.entry(c3.ch).or_default().push(idx);
+                }
+            }
+            sub_groups.values().all(|sub_indices| {
+                let mut seen: HashSet<Option<char>> = HashSet::default();
+                sub_indices
+                    .iter()
+                    .all(|&idx| seen.insert(candidates[idx].word_chars.get(3).map(|wc| wc.ch)))
+            })
+        });
+        if stage_two_ok {
+            DeterministicStage::Two
+        } else {
+            DeterministicStage::Three
+        }
+    }
+
+    fn assign_stage_one_labels(
+        groups: &HashMap<(char, char), Vec<usize>>,
+        candidates: &[JumpCandidate],
+        labels: &mut [Vec<char>],
+    ) {
+        for ((c1, c2), indices) in groups {
+            for &idx in indices {
+                let mut label = vec![*c1, *c2];
+                if let Some(c3) = candidates[idx].word_chars.get(2) {
+                    label.push(c3.ch);
+                }
+                labels[idx] = label;
+            }
+        }
+    }
+
+    fn assign_stage_two_labels(
+        groups: &HashMap<(char, char), Vec<usize>>,
+        candidates: &[JumpCandidate],
+        labels: &mut [Vec<char>],
+    ) {
+        for ((c1, c2), indices) in groups {
+            let mut sub_groups: HashMap<char, Vec<usize>> = HashMap::default();
+            for &idx in indices {
+                if let Some(c3) = candidates[idx].word_chars.get(2) {
+                    sub_groups.entry(c3.ch).or_default().push(idx);
+                }
+            }
+            for (c3, sub_indices) in &sub_groups {
+                let prefix = [*c1, *c2, *c3];
+                let fourths = Self::pick_deterministic_disc_chars(
+                    sub_indices,
+                    candidates,
+                    3,
+                    *c3,
+                    &prefix,
+                );
+                for (&idx, &d) in sub_indices.iter().zip(fourths.iter()) {
+                    labels[idx] = vec![*c1, *c2, *c3, d];
+                }
+            }
+        }
+    }
+
+    fn assign_stage_three_labels(
+        groups: &HashMap<(char, char), Vec<usize>>,
+        labels: &mut [Vec<char>],
+    ) {
+        for ((c1, c2), indices) in groups {
+            for (i, &idx) in indices.iter().enumerate() {
+                let d1 = HELIX_JUMP_ALPHABET[i / HELIX_JUMP_ALPHABET.len()];
+                let d2 = HELIX_JUMP_ALPHABET[i % HELIX_JUMP_ALPHABET.len()];
+                labels[idx] = vec![*c1, *c2, d1, d2];
+            }
+        }
+    }
+
+    /// Pick the discriminator char at `position` in the label for each
+    /// candidate in `indices`, using the deterministic priority chain:
+    ///
+    /// 1. The candidate's own char at this position — first occurrence wins.
+    /// 2. `prev_char` (the char at the previous label position) — at most
+    ///    one slot can claim it.
+    /// 3. A fallback from [`DETERMINISTIC_FALLBACK_CHARS`], skipping any
+    ///    char in `prefix`.
+    /// 4. Any remaining ASCII letter not yet used in this slot batch.
+    fn pick_deterministic_disc_chars(
         indices: &[usize],
         candidates: &[JumpCandidate],
-        c1: char,
-        c2: char,
+        position: usize,
+        prev_char: char,
+        prefix: &[char],
     ) -> Vec<char> {
         let mut chosen: Vec<Option<char>> = vec![None; indices.len()];
         let mut used: HashSet<char> = HashSet::default();
 
-        // Priority 1: each candidate uses its own word's 3rd char if no
-        // earlier candidate in this group has already claimed it. The first
-        // occurrence of a given 3rd char keeps it; later duplicates fall
-        // through to lower-priority discriminators.
         for (slot, &idx) in chosen.iter_mut().zip(indices.iter()) {
-            if let Some(third) = candidates[idx].word_chars.get(2)
-                && used.insert(third.ch)
+            if let Some(wc) = candidates[idx].word_chars.get(position)
+                && used.insert(wc.ch)
             {
-                *slot = Some(third.ch);
+                *slot = Some(wc.ch);
             }
         }
 
-        // Priority 2: same as the word's 2nd char. Only one candidate in the
-        // group can claim it, so the rest fall through to priority 3.
         for slot in chosen.iter_mut() {
             if slot.is_some() {
                 continue;
             }
-            if !used.contains(&c2) {
-                *slot = Some(c2);
-                used.insert(c2);
+            if used.insert(prev_char) {
+                *slot = Some(prev_char);
                 break;
             }
         }
 
-        // Priority 3: fallback alphabet (skip the prefix chars to avoid
-        // visually shadowing them).
         for slot in chosen.iter_mut() {
             if slot.is_some() {
                 continue;
             }
             for &fc in DETERMINISTIC_FALLBACK_CHARS {
-                if fc == c1 || fc == c2 {
+                if prefix.contains(&fc) {
                     continue;
                 }
                 if used.insert(fc) {
@@ -1524,7 +1602,6 @@ impl Vim {
             }
         }
 
-        // Priority 4: any remaining lowercase letter we haven't used yet.
         for slot in chosen.iter_mut() {
             if slot.is_some() {
                 continue;
@@ -1541,31 +1618,6 @@ impl Vim {
             .into_iter()
             .map(|c| c.unwrap_or(DETERMINISTIC_FALLBACK_CHARS[0]))
             .collect()
-    }
-
-    /// When a deterministic group has more candidates than available
-    /// discriminator characters, multiple candidates can end up with the same
-    /// 3-character label. Append a unique 4th character (drawn from the
-    /// fallback list) to each colliding label until they're all distinct.
-    fn extend_colliding_labels_with_fourth_char(indices: &[usize], labels: &mut [Vec<char>]) {
-        let mut counts: HashMap<Vec<char>, usize> = HashMap::default();
-        for &idx in indices {
-            *counts.entry(labels[idx].clone()).or_insert(0) += 1;
-        }
-
-        for &idx in indices {
-            if counts.get(&labels[idx]).copied().unwrap_or(0) <= 1 {
-                continue;
-            }
-            for fc in DETERMINISTIC_FALLBACK_CHARS.iter().copied().chain('a'..='z') {
-                let mut extended = labels[idx].clone();
-                extended.push(fc);
-                if !labels.iter().any(|l| l == &extended) {
-                    labels[idx] = extended;
-                    break;
-                }
-            }
-        }
     }
 
     fn is_monospace_jump_font(
@@ -1784,10 +1836,21 @@ const HELIX_JUMP_MAX_HIDDEN_CHARS: usize = 16;
 const HELIX_JUMP_MAX_LEFT_WS_CHARS: usize = 32;
 
 /// Maximum label length for the deterministic jump-to-word algorithm. The
-/// first two characters always echo the word's first two characters; the third
-/// (and rarely fourth) character is a discriminator that disambiguates words
-/// sharing the same prefix.
+/// first two (or three) characters echo the word's prefix; the remaining
+/// character(s) are a discriminator that disambiguates words sharing the same
+/// prefix.
 const DETERMINISTIC_LABEL_MAX_LEN: usize = 4;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DeterministicStage {
+    /// 3-char labels (`c1 c2 own_c3`).
+    One,
+    /// 4-char labels (`c1 c2 own_c3 D`), `D` chosen by priority chain.
+    Two,
+    /// 4-char labels (`c1 c2 D1 D2`), `(D1, D2)` is a sequential 2-char
+    /// uniqueness factor per `(c1, c2)` group.
+    Three,
+}
 
 /// Fallback discriminator characters tried after the word's own 3rd character
 /// and the word's 2nd character. Ordered roughly by ease of typing on a
@@ -3698,16 +3761,43 @@ mod test {
     }
 
     #[gpui::test]
-    async fn test_helix_jump_deterministic_disambiguates_shared_prefix(
+    async fn test_helix_jump_deterministic_stage2_extends_with_natural_fourth_char(
         cx: &mut gpui::TestAppContext,
     ) {
         let mut cx = VimTestContext::new(cx, true).await;
         cx.enable_helix();
         set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
-        // "alpha" and "alphabet" share the "al" prefix and the same 3rd char
-        // ('p'). The first occurrence ("alpha") keeps the natural "alp"; the
-        // second ("alphabet") falls through to priority 2 and uses 'l' as the
-        // discriminator.
+        // "alpha" and "alpine" share the "alp" prefix (3rd char conflict),
+        // but their 4th chars ('h', 'i') are distinct, so Stage 2 fires
+        // globally: every label becomes 4 chars and echoes the word's first
+        // 3 chars plus the natural 4th char (or priority-chain pick).
+        cx.set_state("ˇalpha alpine beta", Mode::HelixNormal);
+
+        let labels = helix_jump_labels_for_full_buffer(&mut cx);
+        let by_word: std::collections::HashMap<_, _> = labels
+            .iter()
+            .map(|(label, word)| (word.clone(), label.clone()))
+            .collect();
+
+        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alph"));
+        assert_eq!(by_word.get("alpine").map(|s| s.as_str()), Some("alpi"));
+        // beta is alone in its (b, e) group, but Stage 2 is global so it
+        // also gets a 4-char label — its own first 4 chars happen to spell
+        // "beta".
+        assert_eq!(by_word.get("beta").map(|s| s.as_str()), Some("beta"));
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_stage3_two_char_uniqueness_factor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        // "alpha" and "alphabet" share the same first 4 chars ("alph"), so
+        // Stage 2 can't disambiguate at position 4 either. Stage 3 fires
+        // globally: 4-char labels with 2-char prefix and a sequential
+        // 2-char uniqueness factor at positions 3–4.
         cx.set_state("ˇalpha alphabet beta", Mode::HelixNormal);
 
         let labels = helix_jump_labels_for_full_buffer(&mut cx);
@@ -3716,25 +3806,24 @@ mod test {
             .map(|(label, word)| (word.clone(), label.clone()))
             .collect();
 
-        // beta has a unique 2-char prefix; its label is its first three chars.
-        assert_eq!(by_word.get("beta").map(|s| s.as_str()), Some("bet"));
-        // The first match keeps the natural 3rd char.
-        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alp"));
-        // The second match's 3rd char is replaced with the priority-2
-        // discriminator (the word's 2nd char, 'l').
-        assert_eq!(by_word.get("alphabet").map(|s| s.as_str()), Some("all"));
+        // Per-group sequential discriminator: alpha is the 1st in group
+        // (a, l) and alphabet the 2nd; beta is the 1st (and only) in
+        // group (b, e).
+        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alaa"));
+        assert_eq!(by_word.get("alphabet").map(|s| s.as_str()), Some("alab"));
+        assert_eq!(by_word.get("beta").map(|s| s.as_str()), Some("beaa"));
     }
 
     #[gpui::test]
-    async fn test_helix_jump_deterministic_priority_1_keeps_unique_third_char(
+    async fn test_helix_jump_deterministic_stage1_keeps_natural_third_char(
         cx: &mut gpui::TestAppContext,
     ) {
         let mut cx = VimTestContext::new(cx, true).await;
         cx.enable_helix();
         set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
-        // "alpha" and "altitude" share "al" but their 3rd chars ('p', 't') are
-        // unique, so each keeps its own 3rd char as the discriminator —
-        // priority 1 is satisfied for both.
+        // "alpha" and "altitude" share "al" but their 3rd chars ('p', 't')
+        // are distinct, so the (a, l) group has no conflict and Stage 1
+        // gives each candidate the natural 3-char prefix.
         cx.set_state("ˇalpha altitude", Mode::HelixNormal);
 
         let labels = helix_jump_labels_for_full_buffer(&mut cx);
