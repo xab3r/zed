@@ -158,14 +158,14 @@ pub enum Operator {
     HelixSurroundDelete,
     HelixJump {
         behaviour: HelixJumpBehaviour,
-        first_char: Option<char>,
+        typed_chars: Vec<char>,
         labels: Vec<HelixJumpLabel>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HelixJumpLabel {
-    pub label: [char; 2],
+    pub label: Vec<char>,
     pub range: Range<Anchor>,
 }
 

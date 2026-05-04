@@ -24,9 +24,11 @@ use workspace::searchable::{self, Direction, FilteredSearchRange};
 use crate::motion::{self, MotionKind};
 use crate::state::{HelixJumpBehaviour, HelixJumpLabel, Mode, Operator, SearchState};
 use crate::{
-    PushHelixSurroundAdd, PushHelixSurroundDelete, PushHelixSurroundReplace, Vim,
+    PushHelixSurroundAdd, PushHelixSurroundDelete, PushHelixSurroundReplace, Vim, VimSettings,
     motion::{Motion, right},
 };
+use collections::{HashMap, HashSet};
+use settings::JumpToWordAlgorithm;
 use std::ops::Range;
 
 actions!(
@@ -1014,7 +1016,7 @@ impl Vim {
         self.push_operator(
             Operator::HelixJump {
                 behaviour,
-                first_char: None,
+                typed_chars: Vec::new(),
                 labels: data.labels,
             },
             window,
@@ -1028,6 +1030,7 @@ impl Vim {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<HelixJumpUiData> {
+        let algorithm = VimSettings::get_global(cx).jump_to_word_algorithm;
         self.update_editor(cx, |_, editor, cx| {
             let snapshot = editor.snapshot(window, cx);
             let display_snapshot = &snapshot.display_snapshot;
@@ -1060,6 +1063,7 @@ impl Vim {
                 window.text_system(),
                 font,
                 font_size,
+                algorithm,
             )
         })
     }
@@ -1101,19 +1105,39 @@ impl Vim {
         text_system: &WindowTextSystem,
         font: Font,
         font_size: Pixels,
+        algorithm: JumpToWordAlgorithm,
     ) -> HelixJumpUiData {
         if start_offset >= end_offset {
             return HelixJumpUiData::default();
         }
 
-        // First pass: collect all word candidates without assigning labels
-        let candidates = Self::collect_jump_candidates(buffer, start_offset, end_offset, skip_data);
+        // First pass: collect all word candidates without assigning labels.
+        // The deterministic algorithm spells the word's prefix in the label,
+        // so 2-char words don't carry enough information to disambiguate
+        // and are skipped entirely.
+        let min_word_chars = match algorithm {
+            JumpToWordAlgorithm::Default => 2,
+            JumpToWordAlgorithm::Deterministic => 3,
+        };
+        let candidates = Self::collect_jump_candidates(
+            buffer,
+            start_offset,
+            end_offset,
+            skip_data,
+            min_word_chars,
+        );
 
         if candidates.is_empty() {
             return HelixJumpUiData::default();
         }
 
         let ordered_candidates = Self::order_jump_candidates(candidates, cursor_offset);
+        let assigned_labels = match algorithm {
+            JumpToWordAlgorithm::Default => Self::assign_default_labels(&ordered_candidates),
+            JumpToWordAlgorithm::Deterministic => {
+                Self::assign_deterministic_labels(&ordered_candidates)
+            }
+        };
 
         // Now assign labels and build UI data
         let mut labels = Vec::with_capacity(ordered_candidates.len());
@@ -1138,18 +1162,19 @@ impl Vim {
 
         let is_monospace = Self::is_monospace_jump_font(text_system, &font, font_size);
 
-        for (label_index, candidate) in ordered_candidates.into_iter().enumerate() {
+        for (candidate, label) in ordered_candidates.into_iter().zip(assigned_labels) {
             let start_anchor = buffer.anchor_after(candidate.word_start);
             let end_anchor = buffer.anchor_after(candidate.word_end);
-            let label = Self::jump_label_for_index(label_index);
             let label_text = label.iter().collect::<String>();
-            // Monospace fonts: the label always matches the width of the first two characters,
-            // so no per-word measurement is needed.
-            // Proportional fonts: a label like "mw" can be wider than a short word like "if",
-            // so we hide enough of the word (and possibly trailing whitespace) to make room,
-            // or shift the label left into preceding whitespace.
+            // Monospace fonts: the label width matches `label.len()` characters
+            // exactly, so we hide that many word characters and skip the
+            // proportional-font fitting work.
+            // Proportional fonts: a label like "mw" can be wider than a short
+            // word like "if", so we hide enough of the word (and possibly
+            // trailing whitespace) to make room, or shift the label left into
+            // preceding whitespace.
             let fit = if is_monospace {
-                JumpLabelFit::monospace(candidate.first_two_end)
+                JumpLabelFit::monospace(candidate.nth_word_char_end(label.len()))
             } else {
                 let label_width = width_of(&label_text);
                 Self::fit_proportional_jump_label(
@@ -1157,6 +1182,7 @@ impl Vim {
                     &candidate,
                     end_offset,
                     label_width,
+                    label.len(),
                     &width_of,
                 )
             };
@@ -1188,14 +1214,15 @@ impl Vim {
         start_offset: MultiBufferOffset,
         end_offset: MultiBufferOffset,
         skip_data: &HelixJumpSkipData,
+        min_word_chars: usize,
     ) -> Vec<JumpCandidate> {
         let mut candidates = Vec::new();
 
         let mut offset = start_offset;
         let mut in_word = false;
         let mut word_start = start_offset;
-        let mut first_two_end = start_offset;
         let mut char_count = 0;
+        let mut word_chars: Vec<WordChar> = Vec::new();
 
         for chunk in buffer.text_for_range(start_offset..end_offset) {
             for (idx, ch) in chunk.char_indices() {
@@ -1206,21 +1233,25 @@ impl Vim {
                         in_word = true;
                         word_start = absolute;
                         char_count = 0;
+                        word_chars.clear();
                     }
-                    if char_count == 1 {
-                        first_two_end = absolute + ch.len_utf8();
+                    if word_chars.len() < DETERMINISTIC_LABEL_MAX_LEN {
+                        word_chars.push(WordChar {
+                            ch: ch.to_ascii_lowercase(),
+                            end_offset: absolute + ch.len_utf8(),
+                        });
                     }
                     char_count += 1;
                 }
 
                 if !is_word && in_word {
-                    if char_count >= 2
+                    if char_count >= min_word_chars
                         && !Self::should_skip_jump_candidate(word_start, absolute, skip_data)
                     {
                         candidates.push(JumpCandidate {
                             word_start,
                             word_end: absolute,
-                            first_two_end,
+                            word_chars: word_chars.clone(),
                         });
                     }
                     in_word = false;
@@ -1231,13 +1262,13 @@ impl Vim {
 
         // Handle word at end of buffer
         if in_word
-            && char_count >= 2
+            && char_count >= min_word_chars
             && !Self::should_skip_jump_candidate(word_start, end_offset, skip_data)
         {
             candidates.push(JumpCandidate {
                 word_start,
                 word_end: end_offset,
-                first_two_end,
+                word_chars,
             });
         }
 
@@ -1364,11 +1395,177 @@ impl Vim {
         ordered_candidates
     }
 
-    fn jump_label_for_index(index: usize) -> [char; 2] {
-        [
+    fn jump_label_for_index(index: usize) -> Vec<char> {
+        vec![
             HELIX_JUMP_ALPHABET[index / HELIX_JUMP_ALPHABET.len()],
             HELIX_JUMP_ALPHABET[index % HELIX_JUMP_ALPHABET.len()],
         ]
+    }
+
+    fn assign_default_labels(candidates: &[JumpCandidate]) -> Vec<Vec<char>> {
+        (0..candidates.len())
+            .map(Self::jump_label_for_index)
+            .collect()
+    }
+
+    /// Assign labels for the deterministic algorithm.
+    ///
+    /// The first two characters of every label echo the word's first two
+    /// characters. When multiple words share the same first two characters,
+    /// the third character is chosen as a discriminator, with the priorities:
+    ///
+    /// 1. The word's actual third character — if no earlier candidate in
+    ///    this prefix group has already claimed it. The first occurrence of
+    ///    each 3rd char wins; later duplicates fall through.
+    /// 2. The word's second character — if no other label in the group has
+    ///    already taken it.
+    /// 3. A fallback from [`DETERMINISTIC_FALLBACK_CHARS`].
+    /// 4. Any remaining ASCII letter.
+    ///
+    /// If three characters still aren't enough to disambiguate (more than 26
+    /// candidates share the same prefix and discriminator pool), a fourth
+    /// character is appended from the fallback alphabet.
+    fn assign_deterministic_labels(candidates: &[JumpCandidate]) -> Vec<Vec<char>> {
+        let mut labels: Vec<Vec<char>> = vec![Vec::new(); candidates.len()];
+
+        // Candidates always have at least three word characters (enforced by
+        // `collect_jump_candidates` for the deterministic algorithm), so we
+        // can safely group on the first two.
+        let mut groups: HashMap<(char, char), Vec<usize>> = HashMap::default();
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let Some(c1) = candidate.word_chars.first() else {
+                continue;
+            };
+            let Some(c2) = candidate.word_chars.get(1) else {
+                continue;
+            };
+            groups.entry((c1.ch, c2.ch)).or_default().push(idx);
+        }
+
+        for ((c1, c2), indices) in groups {
+            let prefix = vec![c1, c2];
+
+            if indices.len() == 1 {
+                let idx = indices[0];
+                let candidate = &candidates[idx];
+                let mut label = prefix.clone();
+                if let Some(third) = candidate.word_chars.get(2) {
+                    label.push(third.ch);
+                }
+                labels[idx] = label;
+                continue;
+            }
+
+            let third_chars = Self::pick_deterministic_thirds(&indices, candidates, c1, c2);
+
+            for (idx, third) in indices.iter().zip(third_chars.iter()) {
+                let mut label = prefix.clone();
+                label.push(*third);
+                labels[*idx] = label;
+            }
+
+            // If two candidates ended up with identical 3-char labels (the
+            // group is so large the discriminator pool ran out), append a
+            // 4th character to break ties.
+            Self::extend_colliding_labels_with_fourth_char(&indices, &mut labels);
+        }
+
+        labels
+    }
+
+    fn pick_deterministic_thirds(
+        indices: &[usize],
+        candidates: &[JumpCandidate],
+        c1: char,
+        c2: char,
+    ) -> Vec<char> {
+        let mut chosen: Vec<Option<char>> = vec![None; indices.len()];
+        let mut used: HashSet<char> = HashSet::default();
+
+        // Priority 1: each candidate uses its own word's 3rd char if no
+        // earlier candidate in this group has already claimed it. The first
+        // occurrence of a given 3rd char keeps it; later duplicates fall
+        // through to lower-priority discriminators.
+        for (slot, &idx) in chosen.iter_mut().zip(indices.iter()) {
+            if let Some(third) = candidates[idx].word_chars.get(2)
+                && used.insert(third.ch)
+            {
+                *slot = Some(third.ch);
+            }
+        }
+
+        // Priority 2: same as the word's 2nd char. Only one candidate in the
+        // group can claim it, so the rest fall through to priority 3.
+        for slot in chosen.iter_mut() {
+            if slot.is_some() {
+                continue;
+            }
+            if !used.contains(&c2) {
+                *slot = Some(c2);
+                used.insert(c2);
+                break;
+            }
+        }
+
+        // Priority 3: fallback alphabet (skip the prefix chars to avoid
+        // visually shadowing them).
+        for slot in chosen.iter_mut() {
+            if slot.is_some() {
+                continue;
+            }
+            for &fc in DETERMINISTIC_FALLBACK_CHARS {
+                if fc == c1 || fc == c2 {
+                    continue;
+                }
+                if used.insert(fc) {
+                    *slot = Some(fc);
+                    break;
+                }
+            }
+        }
+
+        // Priority 4: any remaining lowercase letter we haven't used yet.
+        for slot in chosen.iter_mut() {
+            if slot.is_some() {
+                continue;
+            }
+            for fc in 'a'..='z' {
+                if used.insert(fc) {
+                    *slot = Some(fc);
+                    break;
+                }
+            }
+        }
+
+        chosen
+            .into_iter()
+            .map(|c| c.unwrap_or(DETERMINISTIC_FALLBACK_CHARS[0]))
+            .collect()
+    }
+
+    /// When a deterministic group has more candidates than available
+    /// discriminator characters, multiple candidates can end up with the same
+    /// 3-character label. Append a unique 4th character (drawn from the
+    /// fallback list) to each colliding label until they're all distinct.
+    fn extend_colliding_labels_with_fourth_char(indices: &[usize], labels: &mut [Vec<char>]) {
+        let mut counts: HashMap<Vec<char>, usize> = HashMap::default();
+        for &idx in indices {
+            *counts.entry(labels[idx].clone()).or_insert(0) += 1;
+        }
+
+        for &idx in indices {
+            if counts.get(&labels[idx]).copied().unwrap_or(0) <= 1 {
+                continue;
+            }
+            for fc in DETERMINISTIC_FALLBACK_CHARS.iter().copied().chain('a'..='z') {
+                let mut extended = labels[idx].clone();
+                extended.push(fc);
+                if !labels.iter().any(|l| l == &extended) {
+                    labels[idx] = extended;
+                    break;
+                }
+            }
+        }
     }
 
     fn is_monospace_jump_font(
@@ -1403,11 +1600,14 @@ impl Vim {
         candidate: &JumpCandidate,
         end_offset: MultiBufferOffset,
         label_width: Pixels,
+        label_len: usize,
         width_of: &F,
     ) -> JumpLabelFit {
         let fit_budget = Self::jump_label_fit_budget(buffer, candidate, end_offset, width_of);
 
-        let mut hidden_prefix = HiddenPrefixFitState::new(candidate.first_two_end);
+        let min_word_chars = label_len.max(2);
+        let initial_hide_end = candidate.nth_word_char_end(min_word_chars);
+        let mut hidden_prefix = HiddenPrefixFitState::new(initial_hide_end, min_word_chars);
         let min_label_scale = if fit_budget.preserve_full_scale {
             1.0
         } else {
@@ -1583,6 +1783,21 @@ const HELIX_JUMP_MIN_LABEL_SCALE: f32 = 1.0;
 const HELIX_JUMP_MAX_HIDDEN_CHARS: usize = 16;
 const HELIX_JUMP_MAX_LEFT_WS_CHARS: usize = 32;
 
+/// Maximum label length for the deterministic jump-to-word algorithm. The
+/// first two characters always echo the word's first two characters; the third
+/// (and rarely fourth) character is a discriminator that disambiguates words
+/// sharing the same prefix.
+const DETERMINISTIC_LABEL_MAX_LEN: usize = 4;
+
+/// Fallback discriminator characters tried after the word's own 3rd character
+/// and the word's 2nd character. Ordered roughly by ease of typing on a
+/// QWERTY keyboard (home-row first, then top row, then bottom row). Tweak this
+/// list to better match a different keyboard layout.
+const DETERMINISTIC_FALLBACK_CHARS: &[char] = &[
+    'j', 'k', 'l', 'h', 'a', 's', 'd', 'f', 'g', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',
+    'z', 'x', 'c', 'v', 'b', 'n', 'm',
+];
+
 fn is_jump_word_char(ch: char) -> bool {
     ch == '_' || ch.is_alphanumeric()
 }
@@ -1592,7 +1807,32 @@ fn is_jump_word_char(ch: char) -> bool {
 struct JumpCandidate {
     word_start: MultiBufferOffset,
     word_end: MultiBufferOffset,
-    first_two_end: MultiBufferOffset,
+    /// Lowercased characters of the start of the word and their end-offsets,
+    /// up to [`DETERMINISTIC_LABEL_MAX_LEN`] entries. Used by the deterministic
+    /// jump-label algorithm to spell the word's prefix in the label, and by
+    /// the label-fitting code to figure out how much of the word the label
+    /// should cover.
+    word_chars: Vec<WordChar>,
+}
+
+#[derive(Clone, Copy)]
+struct WordChar {
+    ch: char,
+    end_offset: MultiBufferOffset,
+}
+
+impl JumpCandidate {
+    /// Offset just after the Nth word character (1-indexed). Falls back to
+    /// `word_end` when the word has fewer than N chars.
+    fn nth_word_char_end(&self, n: usize) -> MultiBufferOffset {
+        if n == 0 {
+            return self.word_start;
+        }
+        self.word_chars
+            .get(n - 1)
+            .map(|wc| wc.end_offset)
+            .unwrap_or(self.word_end)
+    }
 }
 
 struct HelixJumpSkipData {
@@ -1618,6 +1858,11 @@ struct HiddenPrefixFitState {
     hidden_width: Pixels,
     total_char_count: usize,
     word_char_count: usize,
+    /// Minimum number of word characters that must be hidden before any width
+    /// is reported. Defaults to 2 for the original two-character labels;
+    /// longer labels (e.g., the deterministic algorithm's 3-4 char labels) ask
+    /// for a higher minimum so the label always covers its underlying word.
+    min_word_chars: usize,
 }
 
 impl JumpLabelFit {
@@ -1631,13 +1876,14 @@ impl JumpLabelFit {
 }
 
 impl HiddenPrefixFitState {
-    fn new(hide_end_offset: MultiBufferOffset) -> Self {
+    fn new(hide_end_offset: MultiBufferOffset, min_word_chars: usize) -> Self {
         Self {
             text: String::new(),
             hide_end_offset,
             hidden_width: px(0.0),
             total_char_count: 0,
             word_char_count: 0,
+            min_word_chars: min_word_chars.max(2),
         }
     }
 
@@ -1673,7 +1919,11 @@ impl HiddenPrefixFitState {
                     self.word_char_count += 1;
                 }
 
-                if self.word_char_count < 2 {
+                // Defer reporting any hidden width until we've covered enough
+                // word characters. A word shorter than `min_word_chars` falls
+                // through once we walk past `word_end` so we still hide what
+                // we have and grow into trailing whitespace as needed.
+                if self.word_char_count < self.min_word_chars && absolute < word_end {
                     continue;
                 }
 
@@ -1720,10 +1970,11 @@ mod test {
 
     use super::HELIX_JUMP_LABEL_LIMIT;
     use crate::{
-        HELIX_JUMP_OVERLAY_KEY, Vim, VimAddon,
+        HELIX_JUMP_OVERLAY_KEY, Vim, VimAddon, VimSettings,
         state::{Mode, Operator},
         test::VimTestContext,
     };
+    use settings::{JumpToWordAlgorithm, Settings as _};
 
     fn active_helix_jump_labels(cx: &mut VimTestContext) -> Vec<(String, String)> {
         cx.update_editor(|editor, window, cx| {
@@ -1776,10 +2027,12 @@ mod test {
 
         let label = helix_jump_label_for_word(cx, target_word);
 
-        let mut chars = label.chars();
-        let first = chars.next().expect("jump labels are two characters long");
-        let second = chars.next().expect("jump labels are two characters long");
-        cx.simulate_keystrokes(&format!("{first} {second}"));
+        let keystrokes = label
+            .chars()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        cx.simulate_keystrokes(&keystrokes);
     }
 
     fn active_helix_jump_overlay_counts(cx: &mut VimTestContext) -> (usize, usize) {
@@ -1807,6 +2060,14 @@ mod test {
         );
     }
 
+    fn set_jump_to_word_algorithm(cx: &mut VimTestContext, algorithm: JumpToWordAlgorithm) {
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.vim.get_or_insert_default().jump_to_word_algorithm = Some(algorithm);
+            });
+        });
+    }
+
     fn helix_jump_labels_for_full_buffer(cx: &mut VimTestContext) -> Vec<(String, String)> {
         cx.update_editor(|editor, window, cx| {
             let snapshot = editor.snapshot(window, cx);
@@ -1822,6 +2083,7 @@ mod test {
             let font = style.text.font();
             let font_size = style.text.font_size.to_pixels(window.rem_size());
             let label_color = cx.theme().colors().vim_helix_jump_label_foreground;
+            let algorithm = VimSettings::get_global(cx).jump_to_word_algorithm;
             let data = Vim::build_helix_jump_ui_data(
                 buffer_snapshot,
                 MultiBufferOffset(0),
@@ -1832,6 +2094,7 @@ mod test {
                 window.text_system(),
                 font,
                 font_size,
+                algorithm,
             );
 
             data.labels
@@ -3393,9 +3656,9 @@ mod test {
             matches!(
                 cx.active_operator(),
                 Some(Operator::HelixJump {
-                    first_char: Some(ch),
+                    typed_chars,
                     ..
-                }) if ch == next_group
+                }) if typed_chars == vec![next_group]
             ),
             "expected HelixJump operator to keep the first typed label character"
         );
@@ -3411,6 +3674,130 @@ mod test {
 
         cx.assert_state("«oneˇ» two three", Mode::HelixNormal);
         assert_eq!(cx.active_operator(), None);
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_uses_word_prefix(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        cx.set_state("ˇalpha beta gamma delta", Mode::HelixNormal);
+
+        let labels = helix_jump_labels_for_full_buffer(&mut cx);
+        let by_word: std::collections::HashMap<_, _> = labels
+            .iter()
+            .map(|(label, word)| (word.clone(), label.clone()))
+            .collect();
+
+        // Each word has a unique 2-char prefix, so the deterministic algorithm
+        // should produce 3-char labels that simply spell the word's start.
+        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alp"));
+        assert_eq!(by_word.get("beta").map(|s| s.as_str()), Some("bet"));
+        assert_eq!(by_word.get("gamma").map(|s| s.as_str()), Some("gam"));
+        assert_eq!(by_word.get("delta").map(|s| s.as_str()), Some("del"));
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_disambiguates_shared_prefix(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        // "alpha" and "alphabet" share the "al" prefix and the same 3rd char
+        // ('p'). The first occurrence ("alpha") keeps the natural "alp"; the
+        // second ("alphabet") falls through to priority 2 and uses 'l' as the
+        // discriminator.
+        cx.set_state("ˇalpha alphabet beta", Mode::HelixNormal);
+
+        let labels = helix_jump_labels_for_full_buffer(&mut cx);
+        let by_word: std::collections::HashMap<_, _> = labels
+            .iter()
+            .map(|(label, word)| (word.clone(), label.clone()))
+            .collect();
+
+        // beta has a unique 2-char prefix; its label is its first three chars.
+        assert_eq!(by_word.get("beta").map(|s| s.as_str()), Some("bet"));
+        // The first match keeps the natural 3rd char.
+        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alp"));
+        // The second match's 3rd char is replaced with the priority-2
+        // discriminator (the word's 2nd char, 'l').
+        assert_eq!(by_word.get("alphabet").map(|s| s.as_str()), Some("all"));
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_priority_1_keeps_unique_third_char(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        // "alpha" and "altitude" share "al" but their 3rd chars ('p', 't') are
+        // unique, so each keeps its own 3rd char as the discriminator —
+        // priority 1 is satisfied for both.
+        cx.set_state("ˇalpha altitude", Mode::HelixNormal);
+
+        let labels = helix_jump_labels_for_full_buffer(&mut cx);
+        let by_word: std::collections::HashMap<_, _> = labels
+            .iter()
+            .map(|(label, word)| (word.clone(), label.clone()))
+            .collect();
+
+        assert_eq!(by_word.get("alpha").map(|s| s.as_str()), Some("alp"));
+        assert_eq!(by_word.get("altitude").map(|s| s.as_str()), Some("alt"));
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_jumps_to_target(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        cx.set_state("ˇalpha beta gamma", Mode::HelixNormal);
+
+        jump_to_word(&mut cx, "gamma");
+
+        cx.assert_state("alpha beta «gammaˇ»", Mode::HelixNormal);
+        assert_eq!(cx.active_operator(), None);
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_waits_for_full_label(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        cx.set_state("ˇalpha beta", Mode::HelixNormal);
+
+        cx.simulate_keystrokes("g w");
+        cx.simulate_keystrokes("a");
+
+        // Typing a single 'a' is a prefix of "alp" (the alpha label) but not
+        // an exact match; the operator should still be active and waiting for
+        // more input.
+        assert!(matches!(
+            cx.active_operator(),
+            Some(Operator::HelixJump { typed_chars, .. }) if typed_chars == vec!['a']
+        ));
+
+        cx.simulate_keystrokes("l p");
+        cx.assert_state("«alphaˇ» beta", Mode::HelixNormal);
+        assert_eq!(cx.active_operator(), None);
+    }
+
+    #[gpui::test]
+    async fn test_helix_jump_deterministic_skips_short_words(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.enable_helix();
+        set_jump_to_word_algorithm(&mut cx, JumpToWordAlgorithm::Deterministic);
+        // 2-char words like "if" and "be" carry too little information for a
+        // prefix-based label and are skipped. 3-char words are the minimum.
+        cx.set_state("ˇif alpha be cat", Mode::HelixNormal);
+
+        let words = helix_jump_labels_for_full_buffer(&mut cx)
+            .into_iter()
+            .map(|(_, word)| word)
+            .collect::<Vec<_>>();
+
+        assert_eq!(words, vec!["alpha".to_string(), "cat".to_string()]);
     }
 
     #[gpui::test]

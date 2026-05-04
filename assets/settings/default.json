@@ -2514,6 +2514,13 @@
     "gdefault": false,
     "highlight_on_yank_duration": 200,
     "custom_digraphs": {},
+    // Algorithm used to assign labels for the Helix-style jump-to-word action
+    // (`HelixJumpToWord`). Possible values:
+    // - "default": original two-character alphabet labels.
+    // - "deterministic": up to four-character labels whose first characters
+    //   spell the word they point at, disambiguating colliding prefixes
+    //   with a deterministic discriminator.
+    "jump_to_word_algorithm": "default",
     // Cursor shape for each mode.
     // The shape can be one of the following: "block", "bar", "underline", "hollow".
     "cursor_shape": {

@@ -44,7 +44,8 @@ use search::BufferSearchBar;
 use serde::Deserialize;
 use settings::RegisterSetting;
 pub use settings::{
-    ModeContent, Settings, SettingsStore, UseSystemClipboard, update_settings_file,
+    JumpToWordAlgorithm, ModeContent, Settings, SettingsStore, UseSystemClipboard,
+    update_settings_file,
 };
 use state::{
     HelixJumpBehaviour, HelixJumpLabel, Mode, Operator, RecordedSelection, SearchState, VimGlobals,
@@ -1774,7 +1775,7 @@ impl Vim {
     ) {
         let Operator::HelixJump {
             behaviour,
-            first_char,
+            mut typed_chars,
             labels,
         } = operator
         else {
@@ -1784,35 +1785,42 @@ impl Vim {
         let input = input_char.to_ascii_lowercase();
         self.pop_operator(window, cx);
 
-        if let Some(first) = first_char {
-            let first = first.to_ascii_lowercase();
-            if let Some(candidate) = labels.into_iter().find(|label| {
-                label.label[0].eq_ignore_ascii_case(&first)
-                    && label.label[1].eq_ignore_ascii_case(&input)
-            }) {
-                self.finish_helix_jump(candidate, behaviour, window, cx);
-            } else {
-                self.clear_helix_jump_ui(window, cx);
-            }
-        } else {
-            if !labels
-                .iter()
-                .any(|label| label.label[0].eq_ignore_ascii_case(&input))
-            {
-                self.clear_helix_jump_ui(window, cx);
-                return;
-            }
+        typed_chars.push(input);
 
-            self.push_operator(
-                Operator::HelixJump {
-                    behaviour,
-                    first_char: Some(input),
-                    labels,
-                },
-                window,
-                cx,
-            );
+        let prefix_matches = |label: &HelixJumpLabel| -> bool {
+            if label.label.len() < typed_chars.len() {
+                return false;
+            }
+            typed_chars
+                .iter()
+                .zip(label.label.iter())
+                .all(|(typed, expected)| typed.eq_ignore_ascii_case(expected))
+        };
+
+        let exact_match = labels
+            .iter()
+            .find(|label| label.label.len() == typed_chars.len() && prefix_matches(label))
+            .cloned();
+
+        if let Some(candidate) = exact_match {
+            self.finish_helix_jump(candidate, behaviour, window, cx);
+            return;
         }
+
+        if !labels.iter().any(prefix_matches) {
+            self.clear_helix_jump_ui(window, cx);
+            return;
+        }
+
+        self.push_operator(
+            Operator::HelixJump {
+                behaviour,
+                typed_chars,
+                labels,
+            },
+            window,
+            cx,
+        );
     }
 
     fn finish_helix_jump(
@@ -2259,6 +2267,7 @@ struct VimSettings {
     pub custom_digraphs: HashMap<String, Arc<str>>,
     pub highlight_on_yank_duration: u64,
     pub cursor_shape: CursorShapeSettings,
+    pub jump_to_word_algorithm: JumpToWordAlgorithm,
 }
 
 /// Cursor shape configuration for insert mode.
@@ -2346,6 +2355,7 @@ impl Settings for VimSettings {
             custom_digraphs: vim.custom_digraphs.unwrap(),
             highlight_on_yank_duration: vim.highlight_on_yank_duration.unwrap(),
             cursor_shape: vim.cursor_shape.unwrap().into(),
+            jump_to_word_algorithm: vim.jump_to_word_algorithm.unwrap(),
         }
     }
 }

@@ -864,6 +864,33 @@ pub struct VimSettingsContent {
     pub custom_digraphs: Option<HashMap<String, Arc<str>>>,
     pub highlight_on_yank_duration: Option<u64>,
     pub cursor_shape: Option<CursorShapeSettings>,
+    /// Algorithm used to assign labels for the Helix-style jump-to-word action.
+    pub jump_to_word_algorithm: Option<JumpToWordAlgorithm>,
+}
+
+/// Algorithm used to assign labels for the Helix-style jump-to-word action.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum JumpToWordAlgorithm {
+    /// Use the original two-character labels drawn from the alphabet.
+    #[default]
+    Default,
+    /// Use up to four-character labels whose first characters spell the word
+    /// they point at, with deterministic disambiguation when prefixes collide.
+    Deterministic,
 }
 
 #[derive(
