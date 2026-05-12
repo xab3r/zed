@@ -331,15 +331,11 @@ impl Editor {
         .cloned();
 
         if let Some(anchor) = anchor {
+            let autoscroll = Autoscroll::for_go_to_bookmark(self.cursor_top_offset(cx), cx);
             self.unfold_ranges(&[anchor..anchor], true, false, cx);
-            self.change_selections(
-                SelectionEffects::scroll(Autoscroll::center()),
-                window,
-                cx,
-                |s| {
-                    s.select_anchor_ranges([anchor..anchor]);
-                },
-            );
+            self.change_selections(SelectionEffects::scroll(autoscroll), window, cx, |s| {
+                s.select_anchor_ranges([anchor..anchor]);
+            });
         }
     }
 
