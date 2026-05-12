@@ -1942,7 +1942,7 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
-    fn scrolling_section() -> [SettingsPageItem; 9] {
+    fn scrolling_section() -> [SettingsPageItem; 10] {
         [
             SettingsPageItem::SectionHeader("Scrolling"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -2046,6 +2046,25 @@ fn editor_page() -> SettingsPage {
                     pick: |settings_content| settings_content.editor.autoscroll_on_clicks.as_ref(),
                     write: |settings_content, value, _| {
                         settings_content.editor.autoscroll_on_clicks = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Go To Bookmark Scroll Strategy",
+                description: "How to scroll the target into view when navigating to a bookmark.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("go_to_bookmark_scroll_strategy"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .go_to_bookmark_scroll_strategy
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.editor.go_to_bookmark_scroll_strategy = value;
                     },
                 }),
                 metadata: None,

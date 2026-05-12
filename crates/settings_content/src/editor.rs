@@ -210,6 +210,11 @@ pub struct EditorSettingsContent {
     /// Default: center
     pub go_to_definition_scroll_strategy: Option<GoToDefinitionScrollStrategy>,
 
+    /// How to scroll the target into view when navigating to a bookmark.
+    ///
+    /// Default: center
+    pub go_to_bookmark_scroll_strategy: Option<GoToBookmarkScrollStrategy>,
+
     /// Jupyter REPL settings.
     pub jupyter: Option<JupyterContent>,
 
@@ -932,6 +937,37 @@ pub enum OpenResultsIn {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum GoToDefinitionScrollStrategy {
+    /// Vertically center the target in the viewport.
+    #[default]
+    Center,
+    /// Scroll the minimum amount needed to make the target visible.
+    Minimum,
+    /// Scroll so the target appears near the top of the viewport.
+    Top,
+    /// Preserve the cursor's vertical position within the viewport, falling
+    /// back to centering when the cursor is offscreen.
+    Preserve,
+}
+
+/// How to scroll the target into view when navigating to a bookmark.
+///
+/// Default: center
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GoToBookmarkScrollStrategy {
     /// Vertically center the target in the viewport.
     #[default]
     Center,

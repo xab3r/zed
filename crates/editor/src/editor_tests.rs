@@ -52,9 +52,9 @@ use project::{
 use serde_json::{self, json};
 use settings::{
     AllLanguageSettingsContent, DelayMs, EditorSettingsContent, GlobalLspSettingsContent,
-    GoToDefinitionScrollStrategy, IndentGuideBackgroundColoring, IndentGuideColoring,
-    InlayHintSettingsContent, ProjectSettingsContent, ScrollBeyondLastLine, SearchSettingsContent,
-    SettingsContent, SettingsStore,
+    GoToBookmarkScrollStrategy, GoToDefinitionScrollStrategy, IndentGuideBackgroundColoring,
+    IndentGuideColoring, InlayHintSettingsContent, ProjectSettingsContent, ScrollBeyondLastLine,
+    SearchSettingsContent, SettingsContent, SettingsStore,
 };
 use std::{
     borrow::Cow,
@@ -33730,7 +33730,16 @@ struct BookmarkTestContext {
 
 impl BookmarkTestContext {
     async fn new(sample_text: &str, cx: &mut TestAppContext) -> BookmarkTestContext {
+        Self::new_with_editor_settings(sample_text, cx, |_| {}).await
+    }
+
+    async fn new_with_editor_settings(
+        sample_text: &str,
+        cx: &mut TestAppContext,
+        update_editor_settings: impl Fn(&mut EditorSettingsContent),
+    ) -> BookmarkTestContext {
         init_test(cx, |_| {});
+        update_test_editor_settings(cx, &update_editor_settings);
 
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(
@@ -33960,6 +33969,42 @@ impl BookmarkTestContext {
                     editor.move_down(&MoveDown, window, cx);
                 }
             });
+    }
+
+    fn resize_to_lines(&mut self, visible_lines: f32) {
+        let line_height = self
+            .editor
+            .update_in(&mut self.cx, |editor: &mut Editor, window, cx| {
+                editor
+                    .style(cx)
+                    .text
+                    .line_height_in_pixels(window.rem_size())
+            });
+        self.cx
+            .simulate_resize(size(px(1000.), visible_lines * line_height));
+    }
+
+    fn set_scroll_top(&mut self, scroll_top: f64) {
+        self.editor
+            .update_in(&mut self.cx, |editor: &mut Editor, window, cx| {
+                editor.set_scroll_position(gpui::Point::new(0.0, scroll_top), window, cx);
+            });
+    }
+
+    fn scroll_position(&mut self) -> gpui::Point<f64> {
+        self.editor
+            .update_in(&mut self.cx, |editor: &mut Editor, window, cx| {
+                editor.snapshot(window, cx).scroll_position()
+            })
+    }
+
+    fn center_scroll_offset(&mut self) -> f64 {
+        self.editor.update(&mut self.cx, |editor, _| {
+            editor
+                .visible_line_count()
+                .map(|count| ((count - 1.0) / 2.0).floor())
+                .expect("Visible line count should be available")
+        })
     }
 
     fn toggle_bookmark(&mut self) {
@@ -34531,6 +34576,64 @@ async fn test_go_to_previous_bookmark(cx: &mut TestAppContext) {
         ctx.cursor_row(),
         8,
         "Prev-bookmark should wrap around to row 8"
+    );
+}
+
+#[gpui::test]
+async fn test_go_to_bookmark_top_scroll_strategy(cx: &mut TestAppContext) {
+    let sample_text = (0..30).map(|row| format!("Line {row}")).join("\n");
+    let mut ctx = BookmarkTestContext::new_with_editor_settings(&sample_text, cx, |settings| {
+        settings.go_to_bookmark_scroll_strategy = Some(GoToBookmarkScrollStrategy::Top);
+        settings.vertical_scroll_margin = Some(0.0);
+    })
+    .await;
+
+    ctx.resize_to_lines(6.0);
+    ctx.toggle_bookmarks_at_rows(&[10, 20]);
+
+    ctx.move_to_row(15);
+    ctx.set_scroll_top(0.0);
+    ctx.go_to_next_bookmark();
+    assert_eq!(ctx.cursor_row(), 20);
+    assert_eq!(ctx.scroll_position(), gpui::Point::new(0.0, 20.0));
+
+    ctx.move_to_row(15);
+    ctx.set_scroll_top(0.0);
+    ctx.go_to_previous_bookmark();
+    assert_eq!(ctx.cursor_row(), 10);
+    assert_eq!(ctx.scroll_position(), gpui::Point::new(0.0, 10.0));
+}
+
+#[gpui::test]
+async fn test_go_to_bookmark_preserve_scroll_strategy(cx: &mut TestAppContext) {
+    let sample_text = (0..30).map(|row| format!("Line {row}")).join("\n");
+    let mut ctx = BookmarkTestContext::new_with_editor_settings(&sample_text, cx, |settings| {
+        settings.go_to_bookmark_scroll_strategy = Some(GoToBookmarkScrollStrategy::Preserve);
+        settings.vertical_scroll_margin = Some(0.0);
+    })
+    .await;
+
+    ctx.resize_to_lines(6.0);
+    ctx.toggle_bookmarks_at_rows(&[10, 20]);
+
+    ctx.move_to_row(15);
+    ctx.set_scroll_top(13.5);
+    ctx.go_to_next_bookmark();
+    assert_eq!(ctx.cursor_row(), 20);
+    assert_eq!(ctx.scroll_position(), gpui::Point::new(0.0, 18.5));
+
+    ctx.go_to_previous_bookmark();
+    assert_eq!(ctx.cursor_row(), 10);
+    assert_eq!(ctx.scroll_position(), gpui::Point::new(0.0, 8.5));
+
+    let center_offset = ctx.center_scroll_offset();
+    ctx.move_to_row(20);
+    ctx.set_scroll_top(0.0);
+    ctx.go_to_previous_bookmark();
+    assert_eq!(ctx.cursor_row(), 10);
+    assert_eq!(
+        ctx.scroll_position(),
+        gpui::Point::new(0.0, 10.0 - center_offset)
     );
 }
 
