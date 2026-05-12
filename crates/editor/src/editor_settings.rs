@@ -6,9 +6,9 @@ use project::project_settings::DiagnosticSeverity;
 pub use settings::{
     CodeLens, CompletionDetailAlignment, CompletionMenuItemKind, CurrentLineHighlight, DelayMs,
     DiffViewStyle, DisplayIn, DocumentColorsRenderMode, DoubleClickInMultibuffer, GitGutterWidth,
-    GoToDefinitionFallback, GoToDefinitionScrollStrategy, MinimapThumb, MinimapThumbBorder,
-    MultiCursorModifier, OpenResultsIn, ScrollBeyondLastLine, ScrollbarDiagnostics,
-    SeedQuerySetting, ShowMinimap, SnippetSortOrder,
+    GoToBookmarkScrollStrategy, GoToDefinitionFallback, GoToDefinitionScrollStrategy, MinimapThumb,
+    MinimapThumbBorder, MultiCursorModifier, OpenResultsIn, ScrollBeyondLastLine,
+    ScrollbarDiagnostics, SeedQuerySetting, ShowMinimap, SnippetSortOrder,
 };
 use settings::{RegisterSetting, RelativeLineNumbers, Settings};
 use ui::scrollbars::ShowScrollbar;
@@ -57,6 +57,7 @@ pub struct EditorSettings {
     pub go_to_definition_fallback: GoToDefinitionFallback,
     pub go_to_definition_scroll_strategy: GoToDefinitionScrollStrategy,
     pub lsp_results_location: OpenResultsIn,
+    pub go_to_bookmark_scroll_strategy: GoToBookmarkScrollStrategy,
     pub jupyter: Jupyter,
     pub snippet_sort_order: SnippetSortOrder,
     pub diagnostics_max_severity: Option<DiagnosticSeverity>,
@@ -318,6 +319,7 @@ impl Settings for EditorSettings {
             go_to_definition_fallback: editor.go_to_definition_fallback.unwrap(),
             go_to_definition_scroll_strategy: editor.go_to_definition_scroll_strategy.unwrap(),
             lsp_results_location: editor.lsp_results_location.unwrap(),
+            go_to_bookmark_scroll_strategy: editor.go_to_bookmark_scroll_strategy.unwrap(),
             jupyter: Jupyter {
                 enabled: editor.jupyter.unwrap().enabled.unwrap(),
             },

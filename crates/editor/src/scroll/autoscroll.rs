@@ -2,7 +2,7 @@ use crate::{
     DisplayPoint, DisplayRow, Editor, EditorMode, EditorSettings, LineWithInvisibles, RowExt,
     SelectionEffects,
     display_map::{DisplaySnapshot, ToDisplayPoint},
-    editor_settings::GoToDefinitionScrollStrategy,
+    editor_settings::{GoToBookmarkScrollStrategy, GoToDefinitionScrollStrategy},
     scroll::{ScrollOffset, WasScrolled},
 };
 use gpui::{App, Bounds, Context, Pixels, Window};
@@ -42,6 +42,19 @@ impl Autoscroll {
             GoToDefinitionScrollStrategy::Minimum => Self::fit(),
             GoToDefinitionScrollStrategy::Top => Self::focused(),
             GoToDefinitionScrollStrategy::Preserve => {
+                offset.map(Self::top_relative).unwrap_or_else(Self::center)
+            }
+        }
+    }
+
+    /// Returns the autoscroll strategy configured for bookmark navigation,
+    /// based on `go_to_bookmark_scroll_strategy`.
+    pub fn for_go_to_bookmark(offset: Option<ScrollOffset>, cx: &App) -> Self {
+        match EditorSettings::get_global(cx).go_to_bookmark_scroll_strategy {
+            GoToBookmarkScrollStrategy::Center => Self::center(),
+            GoToBookmarkScrollStrategy::Minimum => Self::fit(),
+            GoToBookmarkScrollStrategy::Top => Self::focused(),
+            GoToBookmarkScrollStrategy::Preserve => {
                 offset.map(Self::top_relative).unwrap_or_else(Self::center)
             }
         }
