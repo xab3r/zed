@@ -2828,6 +2828,10 @@ impl Editor {
             key_context.add("selection_mode");
         }
 
+        if self.has_non_empty_selection(&self.display_snapshot(cx)) {
+            key_context.add("has_selection");
+        }
+
         let disjoint = self.selections.disjoint_anchors();
         if disjoint.len() > 1 {
             key_context.add("multiple_selections");

@@ -40268,6 +40268,33 @@ async fn test_end_of_editor_context(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_has_selection_context(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let mut cx = EditorTestContext::new(cx).await;
+
+    cx.set_state("line1ˇ\nline2");
+    cx.update_editor(|editor, window, cx| {
+        assert!(!editor.key_context(window, cx).contains("has_selection"));
+    });
+
+    cx.set_state("ˇline1\nˇline2");
+    cx.update_editor(|editor, window, cx| {
+        assert!(!editor.key_context(window, cx).contains("has_selection"));
+    });
+
+    cx.set_state("«line1ˇ»\nline2");
+    cx.update_editor(|editor, window, cx| {
+        assert!(editor.key_context(window, cx).contains("has_selection"));
+    });
+
+    cx.set_state("line1ˇ\n«line2ˇ»");
+    cx.update_editor(|editor, window, cx| {
+        assert!(editor.key_context(window, cx).contains("has_selection"));
+    });
+}
+
+#[gpui::test]
 async fn test_sticky_scroll(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
     let mut cx = EditorTestContext::new(cx).await;
