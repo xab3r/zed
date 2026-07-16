@@ -832,6 +832,15 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: expanded
     pub commit_editor: Option<GitPanelCommitEditor>,
+
+    /// Amount of indentation (in pixels) for nested items in tree view.
+    ///
+    /// Default: 16
+    #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
+    pub indent_size: Option<f32>,
+
+    /// Settings related to indent guides in the git panel.
+    pub indent_guides: Option<IndentGuidesSettingsContent>,
 }
 
 #[with_fallible_options]
@@ -841,6 +850,15 @@ pub struct GitGraphSettingsContent {
     ///
     /// Default: absolute
     pub date_style: Option<GitDateStyle>,
+
+    /// Amount of indentation (in pixels) for nested items in the changed files tree.
+    ///
+    /// Default: 20
+    #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
+    pub indent_size: Option<f32>,
+
+    /// Settings related to indent guides in the git graph.
+    pub indent_guides: Option<IndentGuidesSettingsContent>,
 }
 
 #[derive(

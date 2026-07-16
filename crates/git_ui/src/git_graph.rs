@@ -6,6 +6,7 @@ use crate::{
     },
     commit_tooltip::CommitAvatar,
     commit_view::CommitView,
+    git_panel_settings::IndentGuidesSettings,
     git_status_icon,
     git_timestamp::format_git_timestamp,
 };
@@ -38,7 +39,7 @@ use project::{
         GraphDataResponse, Repository, RepositoryEvent, RepositoryId,
     },
 };
-use settings::{GitDateStyle, RegisterSetting, Settings};
+use settings::{GitDateStyle, RegisterSetting, Settings, ShowIndentGuides};
 use smallvec::{SmallVec, smallvec};
 use std::{
     cell::Cell,
@@ -78,7 +79,6 @@ const LINE_WIDTH: Pixels = px(2.0);
 const RESIZE_HANDLE_WIDTH: f32 = 8.0;
 const COPIED_STATE_DURATION: Duration = Duration::from_secs(2);
 const COMMIT_TAG_LIST_WIDTH_IN_REMS: Rems = rems(10.);
-const TREE_INDENT: f32 = 20.0;
 const TABLE_COLUMN_COUNT: usize = 4;
 const REFS_COLUMN_INDEX: usize = 0;
 const GRAPH_COLUMN_INDEX: usize = 1;
@@ -283,7 +283,7 @@ impl ChangedFileEntry {
         commit_sha: SharedString,
         repository: WeakEntity<Repository>,
         workspace: WeakEntity<Workspace>,
-        _cx: &App,
+        cx: &App,
     ) -> AnyElement {
         let file_name = self.file_name.clone();
         let dir_path = self.dir_path.clone();
@@ -291,7 +291,7 @@ impl ChangedFileEntry {
         ListItem::new(("changed-file", ix))
             .spacing(ListItemSpacing::Sparse)
             .indent_level(depth)
-            .indent_step_size(px(TREE_INDENT))
+            .indent_step_size(px(GitGraphSettings::get_global(cx).indent_size))
             .start_slot(git_status_icon(self.status))
             .child(
                 Label::new(file_name.clone())
@@ -383,7 +383,7 @@ impl ChangedFileDirectoryEntry {
         ListItem::new(("changed-file-dir", ix))
             .spacing(ListItemSpacing::Sparse)
             .indent_level(self.depth)
-            .indent_step_size(px(TREE_INDENT))
+            .indent_step_size(px(GitGraphSettings::get_global(cx).indent_size))
             .start_slot(folder_icon)
             .child(
                 Label::new(self.name.clone())
@@ -621,12 +621,19 @@ fn timestamp_format() -> &'static [BorrowedFormatItem<'static>] {
 #[derive(Clone, Debug, RegisterSetting)]
 pub(crate) struct GitGraphSettings {
     pub date_style: GitDateStyle,
+    pub indent_size: f32,
+    pub indent_guides: IndentGuidesSettings,
 }
 
 impl Settings for GitGraphSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
+        let git_graph = content.git_graph.as_ref().unwrap();
         Self {
-            date_style: content.git_graph.as_ref().unwrap().date_style.unwrap(),
+            date_style: git_graph.date_style.unwrap(),
+            indent_size: git_graph.indent_size.unwrap(),
+            indent_guides: IndentGuidesSettings {
+                show: git_graph.indent_guides.unwrap().show.unwrap(),
+            },
         }
     }
 }
@@ -1723,8 +1730,8 @@ impl GitGraph {
                     state.scroll_handle.0.borrow_mut().last_item_size = None;
                 });
                 row_height = new_row_height;
-                cx.notify();
             }
+            cx.notify();
         })
         .detach();
 
@@ -3476,6 +3483,10 @@ impl GitGraph {
                                 } else {
                                     flat_entries.len()
                                 };
+                                let settings = GitGraphSettings::get_global(cx);
+                                let indent_size = settings.indent_size;
+                                let show_indent_guides =
+                                    settings.indent_guides.show == ShowIndentGuides::Always;
                                 let commit_sha = full_sha.clone();
                                 let repository = repository.downgrade();
                                 let workspace = self.workspace.clone();
@@ -3524,10 +3535,10 @@ impl GitGraph {
                                             .collect()
                                     },
                                 )
-                                .when(is_tree_view, |list| {
+                                .when(is_tree_view && show_indent_guides, |list| {
                                     list.with_decoration(
                                         ui::indent_guides(
-                                            px(TREE_INDENT),
+                                            px(indent_size),
                                             IndentGuideColors::panel(cx),
                                         )
                                         .with_left_offset(
