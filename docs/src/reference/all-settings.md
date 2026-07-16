@@ -6154,6 +6154,10 @@ See the [debugger page](../debugger.md) for more information about debugging sup
     "group_by": "status",
     "collapse_untracked_diff": false,
     "tree_view": false,
+    "indent_size": 16,
+    "indent_guides": {
+      "show": "always"
+    },
     "scrollbar": {
       "show": null
     },
@@ -6179,6 +6183,8 @@ See the [debugger page](../debugger.md) for more information about debugging sup
 - `group_by`: How to group entries in the git panel. Can be `none` or `status`
 - `collapse_untracked_diff`: Whether to collapse untracked files in the diff panel
 - `tree_view`: Whether to show entries in tree or flat view in the panel
+- `indent_size`: Amount of indentation (in pixels) for nested items in tree view
+- `indent_guides`: When to show indent guides in the git panel. `show` can be `always` or `never`
 - `scrollbar`: When to show the scrollbar in the git panel
 - `starts_open`: Whether the git panel should open on startup
 - `commit_editor`: Whether the commit message editor is shown in the git panel by default. Can be `expanded` or `collapsed`
@@ -6186,6 +6192,28 @@ See the [debugger page](../debugger.md) for more information about debugging sup
 - `diff_stats`: Whether to show the addition/deletion change count next to each file in the git panel
 - `commit_title_max_length`: Maximum length of the commit message title before a warning is shown. Set to `0` to disable
 - `entry_primary_click_action`: Default action when clicking a changed file in the git panel. Can be `project_diff`, `file_diff`, or `view_file`
+
+## Git Graph
+
+- Description: Setting to customize the behavior of the git graph.
+- Setting: `git_graph`
+- Default:
+
+```json [settings]
+{
+  "git_graph": {
+    "indent_size": 20,
+    "indent_guides": {
+      "show": "always"
+    }
+  }
+}
+```
+
+**Options**
+
+- `indent_size`: Amount of indentation (in pixels) for nested items in the changed files tree
+- `indent_guides`: When to show indent guides in the git graph. `show` can be `always` or `never`
 
 ## Git Worktree Directory
 
