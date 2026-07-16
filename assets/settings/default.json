@@ -1141,6 +1141,38 @@
     // Choices: project_diff, file_diff, view_file
     // Default: project_diff
     "entry_primary_click_action": "project_diff",
+    // Amount of indentation (in pixels) for nested items in tree view.
+    //
+    // Default: 16
+    "indent_size": 16,
+    // Settings related to indent guides in the git panel.
+    "indent_guides": {
+      // When to show indent guides in the git panel.
+      // This setting can take two values:
+      //
+      // 1. Always show indent guides:
+      //    "always"
+      // 2. Never show indent guides:
+      //    "never"
+      "show": "always",
+    },
+  },
+  "git_graph": {
+    // Amount of indentation (in pixels) for nested items in the changed files tree.
+    //
+    // Default: 20
+    "indent_size": 20,
+    // Settings related to indent guides in the git graph.
+    "indent_guides": {
+      // When to show indent guides in the git graph.
+      // This setting can take two values:
+      //
+      // 1. Always show indent guides:
+      //    "always"
+      // 2. Never show indent guides:
+      //    "never"
+      "show": "always",
+    },
   },
   "agent": {
     // Whether the inline assistant should use streaming tools, when available
