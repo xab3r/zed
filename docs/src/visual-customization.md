@@ -588,8 +588,20 @@ See [Terminal settings](./reference/all-settings.md#terminal) for additional non
     "status_style": "icon",       // label_color, icon
     "sort_by": "path",            // path, name
     "group_by": "status",         // none, status, staging
+    "indent_size": 16,            // Indentation for nested items in tree view (pixels)
+    "indent_guides": {
+      "show": "always"            // Show indent guides (always, never)
+    },
     "scrollbar": {
       "show": null                // Show/hide: (auto, system, always, never)
+    }
+  },
+
+  // Git Graph
+  "git_graph": {
+    "indent_size": 20,            // Indentation for nested items in the changed files tree (pixels)
+    "indent_guides": {
+      "show": "always"            // Show indent guides (always, never)
     }
   },
 

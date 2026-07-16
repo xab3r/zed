@@ -6383,7 +6383,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn git_panel_section() -> [SettingsPageItem; 18] {
+    fn git_panel_section() -> [SettingsPageItem; 20] {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -6556,6 +6556,52 @@ fn panels_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.git_panel.get_or_insert_default().tree_view = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Indent Size",
+                description: "Amount of indentation for nested items in tree view.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_panel.indent_size"),
+                    pick: |settings_content| {
+                        settings_content.git_panel.as_ref()?.indent_size.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .indent_size = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Show Indent Guides",
+                description: "When to show indent guides in the git panel.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_panel.indent_guides.show"),
+                    pick: |settings_content| {
+                        settings_content
+                            .git_panel
+                            .as_ref()?
+                            .indent_guides
+                            .as_ref()?
+                            .show
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .indent_guides
+                            .get_or_insert_default()
+                            .show = value;
                     },
                 }),
                 metadata: None,
@@ -8460,6 +8506,58 @@ fn version_control_page() -> SettingsPage {
         ]
     }
 
+    fn git_graph_section() -> [SettingsPageItem; 3] {
+        [
+            SettingsPageItem::SectionHeader("Git Graph"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Indent Size",
+                description: "Amount of indentation for nested items in the changed files tree.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_graph.indent_size"),
+                    pick: |settings_content| {
+                        settings_content.git_graph.as_ref()?.indent_size.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .git_graph
+                            .get_or_insert_default()
+                            .indent_size = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Show Indent Guides",
+                description: "When to show indent guides in the git graph.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_graph.indent_guides.show"),
+                    pick: |settings_content| {
+                        settings_content
+                            .git_graph
+                            .as_ref()?
+                            .indent_guides
+                            .as_ref()?
+                            .show
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .git_graph
+                            .get_or_insert_default()
+                            .indent_guides
+                            .get_or_insert_default()
+                            .show = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: "Version Control",
         items: concat_sections![
@@ -8470,6 +8568,7 @@ fn version_control_page() -> SettingsPage {
             branch_picker_section(),
             file_diff_section(),
             git_hunks_section(),
+            git_graph_section(),
         ],
     }
 }

@@ -5905,6 +5905,10 @@ See the [debugger page](../debugger.md) for more information about debugging sup
     "sort_by": "path",
     "group_by": "status",
     "collapse_untracked_diff": false,
+    "indent_size": 16,
+    "indent_guides": {
+      "show": "always"
+    },
     "scrollbar": {
       "show": null
     },
@@ -5923,8 +5927,32 @@ See the [debugger page](../debugger.md) for more information about debugging sup
 - `sort_by`: How to sort entries in the git panel. Can be `path` or `name`
 - `group_by`: How to group entries in the git panel. Can be `none` or `status`
 - `collapse_untracked_diff`: Whether to collapse untracked files in the diff panel
+- `indent_size`: Amount of indentation (in pixels) for nested items in tree view
+- `indent_guides`: When to show indent guides in the git panel. `show` can be `always` or `never`
 - `scrollbar`: When to show the scrollbar in the git panel
 - `starts_open`: Whether the git panel should open on startup
+
+## Git Graph
+
+- Description: Setting to customize the behavior of the git graph.
+- Setting: `git_graph`
+- Default:
+
+```json [settings]
+{
+  "git_graph": {
+    "indent_size": 20,
+    "indent_guides": {
+      "show": "always"
+    }
+  }
+}
+```
+
+**Options**
+
+- `indent_size`: Amount of indentation (in pixels) for nested items in the changed files tree
+- `indent_guides`: When to show indent guides in the git graph. `show` can be `always` or `never`
 
 ## Git Worktree Directory
 

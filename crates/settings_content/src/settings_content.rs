@@ -197,6 +197,8 @@ pub struct SettingsContent {
 
     pub git_panel: Option<GitPanelSettingsContent>,
 
+    pub git_graph: Option<GitGraphSettingsContent>,
+
     pub tabs: Option<ItemSettingsContent>,
     pub tab_bar: Option<TabBarSettingsContent>,
     pub status_bar: Option<StatusBarSettingsContent>,
@@ -401,7 +403,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
     options: {
         call_hierarchy, file_finder, git_panel, tabs, tab_bar, status_bar, preview_tabs, agent,
         agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
-        git,
+        git, git_graph,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, language_models, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
@@ -808,6 +810,28 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: project_diff
     pub entry_primary_click_action: Option<GitPanelClickBehavior>,
+
+    /// Amount of indentation (in pixels) for nested items in tree view.
+    ///
+    /// Default: 16
+    #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
+    pub indent_size: Option<f32>,
+
+    /// Settings related to indent guides in the git panel.
+    pub indent_guides: Option<IndentGuidesSettingsContent>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug)]
+pub struct GitGraphSettingsContent {
+    /// Amount of indentation (in pixels) for nested items in the changed files tree.
+    ///
+    /// Default: 20
+    #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
+    pub indent_size: Option<f32>,
+
+    /// Settings related to indent guides in the git graph.
+    pub indent_guides: Option<IndentGuidesSettingsContent>,
 }
 
 #[derive(
