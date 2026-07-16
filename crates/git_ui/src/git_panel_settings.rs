@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{
     FolderIndicator, GitPanelClickBehavior, GitPanelCommitEditor, GitPanelGroupBy, GitPanelSortBy,
-    IntoGpui, RegisterSetting, Settings, StatusStyle,
+    IntoGpui, RegisterSetting, Settings, ShowIndentGuides, StatusStyle,
 };
 use ui::scrollbars::{ScrollbarVisibility, ShowScrollbar};
 use workspace::dock::DockPosition;
@@ -12,6 +12,11 @@ use workspace::dock::DockPosition;
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ScrollbarSettings {
     pub show: Option<ShowScrollbar>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct IndentGuidesSettings {
+    pub show: ShowIndentGuides,
 }
 
 #[derive(Debug, Clone, PartialEq, RegisterSetting)]
@@ -34,6 +39,28 @@ pub struct GitPanelSettings {
     pub commit_title_max_length: usize,
     pub entry_primary_click_action: GitPanelClickBehavior,
     pub commit_editor: GitPanelCommitEditor,
+    // TODO: We should revise this part. The default (16) is not aligned with the
+    // project panel's indent_size (20).
+    pub indent_size: f32,
+    pub indent_guides: IndentGuidesSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, RegisterSetting)]
+pub struct GitGraphSettings {
+    pub indent_size: f32,
+    pub indent_guides: IndentGuidesSettings,
+}
+
+impl Settings for GitGraphSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        let git_graph = content.git_graph.as_ref().unwrap();
+        Self {
+            indent_size: git_graph.indent_size.unwrap(),
+            indent_guides: IndentGuidesSettings {
+                show: git_graph.indent_guides.unwrap().show.unwrap(),
+            },
+        }
+    }
 }
 
 #[derive(Default)]
@@ -84,6 +111,10 @@ impl Settings for GitPanelSettings {
             commit_title_max_length: git_panel.commit_title_max_length.unwrap(),
             entry_primary_click_action: git_panel.entry_primary_click_action.unwrap(),
             commit_editor: git_panel.commit_editor.unwrap(),
+            indent_size: git_panel.indent_size.unwrap(),
+            indent_guides: IndentGuidesSettings {
+                show: git_panel.indent_guides.unwrap().show.unwrap(),
+            },
         }
     }
 }

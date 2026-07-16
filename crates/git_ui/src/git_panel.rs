@@ -76,7 +76,7 @@ use prompt_store::RULES_FILE_NAMES;
 use serde::{Deserialize, Serialize};
 use settings::{
     GitPanelClickBehavior, GitPanelCommitEditor, GitPanelGroupBy, GitPanelSortBy, Settings,
-    SettingsStore, StatusStyle, update_settings_file,
+    SettingsStore, ShowIndentGuides, StatusStyle, update_settings_file,
 };
 use smallvec::SmallVec;
 use std::cell::Cell;
@@ -110,8 +110,6 @@ use zed_actions::{
 
 const GIT_PANEL_KEY: &str = "GitPanel";
 const UPDATE_DEBOUNCE: Duration = Duration::from_millis(50);
-// TODO: We should revise this part. It seems the indentation width is not aligned with the one in project panel
-const TREE_INDENT: f32 = 16.0;
 const MAX_HISTORY_TAG_CHIPS: usize = 3;
 // Horizontal offset that aligns the tree indent guides with the row icon column.
 const INDENT_GUIDE_LEFT_OFFSET: gpui::Pixels = gpui::px(19.);
@@ -1334,8 +1332,6 @@ impl GitPanel {
             let mut was_sort_by = GitPanelSettings::get_global(cx).sort_by;
             let mut was_group_by = GitPanelSettings::get_global(cx).group_by;
             let mut was_tree_view = GitPanelSettings::get_global(cx).tree_view;
-            let mut was_file_icons = GitPanelSettings::get_global(cx).file_icons;
-            let mut was_folder_indicator = GitPanelSettings::get_global(cx).folder_indicator;
             let mut was_diff_stats = GitPanelSettings::get_global(cx).diff_stats;
             let mut was_commit_editor = GitPanelSettings::get_global(cx).commit_editor;
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
@@ -1343,8 +1339,6 @@ impl GitPanel {
                 let sort_by = settings.sort_by;
                 let group_by = settings.group_by;
                 let tree_view = settings.tree_view;
-                let file_icons = settings.file_icons;
-                let folder_indicator = settings.folder_indicator;
                 let diff_stats = settings.diff_stats;
                 let commit_editor = settings.commit_editor;
                 // Changing the setting is an explicit request, so it wins over
@@ -1380,14 +1374,10 @@ impl GitPanel {
                 if (diff_stats != was_diff_stats) || update_entries {
                     this.update_visible_entries(window, cx);
                 }
-                if file_icons != was_file_icons || folder_indicator != was_folder_indicator {
-                    cx.notify();
-                }
+                cx.notify();
                 was_sort_by = sort_by;
                 was_group_by = group_by;
                 was_tree_view = tree_view;
-                was_file_icons = file_icons;
-                was_folder_indicator = folder_indicator;
                 was_diff_stats = diff_stats;
                 was_commit_editor = commit_editor;
             })
@@ -8053,6 +8043,9 @@ impl GitPanel {
             GitPanelViewMode::Tree(state) => (true, state.logical_indices.len()),
             GitPanelViewMode::Flat => (false, self.visible_flat_entry_indices().len()),
         };
+        let settings = GitPanelSettings::get_global(cx);
+        let indent_size = settings.indent_size;
+        let show_indent_guides = settings.indent_guides.show == ShowIndentGuides::Always;
         let repo = repo.downgrade();
 
         v_flex()
@@ -8141,9 +8134,9 @@ impl GitPanel {
                                 items
                             }),
                         )
-                        .when(is_tree_view, |list| {
+                        .when(is_tree_view && show_indent_guides, |list| {
                             list.with_decoration(
-                                ui::indent_guides(px(TREE_INDENT), IndentGuideColors::panel(cx))
+                                ui::indent_guides(px(indent_size), IndentGuideColors::panel(cx))
                                     .with_left_offset(INDENT_GUIDE_LEFT_OFFSET)
                                     .with_compute_indents_fn(
                                         cx.entity(),
@@ -8699,7 +8692,7 @@ impl GitPanel {
             })
             .map(|this| {
                 if tree_view {
-                    this.pl(px(depth as f32 * TREE_INDENT)).child(
+                    this.pl(px(depth as f32 * settings.indent_size)).child(
                         self.entry_label(display_name, label_color)
                             .when(status.is_deleted(), Label::strikethrough)
                             .truncate(),
@@ -8916,7 +8909,7 @@ impl GitPanel {
         let name_row = h_flex()
             .min_w_0()
             .gap_1()
-            .pl(px(entry.depth as f32 * TREE_INDENT))
+            .pl(px(entry.depth as f32 * settings.indent_size))
             .child(h_flex().flex_none().gap_0p5().children({
                 let render_indicator = |themed: Option<SharedString>, fallback: IconName| {
                     themed
