@@ -61,6 +61,9 @@ pub struct ItemSettings {
     pub file_icons: bool,
     pub show_diagnostics: ShowDiagnostics,
     pub show_close_button: ShowCloseButton,
+    /// Effective maximum tab title length: `usize::MAX` when the user disables
+    /// truncation by setting `0`.
+    pub max_title_length: usize,
 }
 
 #[derive(RegisterSetting)]
@@ -91,6 +94,12 @@ impl Settings for ItemSettings {
             file_icons: tabs.file_icons.unwrap(),
             show_diagnostics: tabs.show_diagnostics.unwrap(),
             show_close_button: tabs.show_close_button.unwrap(),
+            max_title_length: match tabs.max_title_length.unwrap() {
+                // 0 is the user-facing "never truncate" sentinel; clamp other
+                // values because `truncate_and_trailoff` requires at least 5.
+                0 => usize::MAX,
+                length => length.max(5),
+            },
         }
     }
 }

@@ -4742,7 +4742,7 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn tab_settings_section() -> [SettingsPageItem; 4] {
+    fn tab_settings_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader("Tab Settings"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4797,6 +4797,25 @@ fn window_and_layout_page() -> SettingsPage {
                             .tabs
                             .get_or_insert_default()
                             .show_close_button = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Maximum Title Length",
+                description: "Maximum number of characters in a tab's title before it is truncated. Set to 0 to never truncate.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("tabs.max_title_length"),
+                    pick: |settings_content| {
+                        settings_content.tabs.as_ref()?.max_title_length.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .tabs
+                            .get_or_insert_default()
+                            .max_title_length = value;
                     },
                 }),
                 metadata: None,
