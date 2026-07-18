@@ -28,6 +28,36 @@ the switcher is closed.
 The Tab Switcher can also be opened with either {#action tab_switcher::Toggle} ({#kb tab_switcher::Toggle})
 or {#action tab_switcher::ToggleAll}.
 
+Both actions accept a `select_last` option to open the switcher with the last
+item in the list preselected:
+
+```json
+{
+  "bindings": {
+    "ctrl-shift-tab": ["tab_switcher::Toggle", { "select_last": true }]
+  }
+}
+```
+
+## Tab Ordering
+
+By default, tabs are listed by most recent activation, so the tab you were just
+working on is always near the top.
+
+The {#action tab_switcher::ToggleAll} action additionally accepts a
+`match_tabs_order` option. When set to `true`, tabs are listed in the same
+order as they appear in the tab bars (pane by pane) instead of by recent
+activation, and the currently active tab is preselected. Searching is
+unaffected: typing a query always sorts the list by fuzzy-match relevance.
+
+```json
+{
+  "bindings": {
+    "ctrl-shift-tab": ["tab_switcher::ToggleAll", { "match_tabs_order": true }]
+  }
+}
+```
+
 While the Tab Switcher is open, you can:
 
 - Press {#kb menu::SelectNext} to move to the next tab in the list
