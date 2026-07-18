@@ -584,7 +584,7 @@ async fn test_toggle_all_stays_open_after_closing_last_tab_in_active_pane(
     open_buffer("b.txt", &workspace, cx).await;
 
     // Right pane (with b.txt) is now the active pane.
-    cx.dispatch_action(ToggleAll);
+    cx.dispatch_action(ToggleAll::default());
     let tab_switcher = get_active_tab_switcher(&workspace, cx);
 
     tab_switcher.update(cx, |picker, _| {
