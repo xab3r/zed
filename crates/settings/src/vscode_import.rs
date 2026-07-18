@@ -804,6 +804,7 @@ impl VsCodeSettings {
                         ShowCloseButton::Hidden
                     }
                 }),
+            max_title_length: None,
         })
     }
 
