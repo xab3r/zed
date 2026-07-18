@@ -1629,7 +1629,8 @@ or
     "git_status": false,
     "activate_on_close": "history",
     "show_close_button": "hover",
-    "show_diagnostics": "off"
+    "show_diagnostics": "off",
+    "max_title_length": 24
   }
 }
 ```
@@ -1784,6 +1785,24 @@ or
 {
   "tabs": {
     "show_diagnostics": "all"
+  }
+}
+```
+
+### Maximum Title Length
+
+- Description: Maximum number of characters to display in a tab's title before truncating it with an ellipsis.
+- Setting: `max_title_length`
+- Default: `24`
+
+**Options**
+
+`integer` values. Set to `0` to never truncate tab titles:
+
+```json [settings]
+{
+  "tabs": {
+    "max_title_length": 0
   }
 }
 ```
