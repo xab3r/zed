@@ -13,8 +13,8 @@ use crate::{
 use anyhow::Context as _;
 use collections::HashMap;
 use editor::{
-    Anchor, Editor, EditorEvent, EditorSettings, MAX_TAB_TITLE_LEN, MultiBuffer, PathKey,
-    SearchResultsStatus, SelectionEffects,
+    Anchor, Editor, EditorEvent, EditorSettings, MultiBuffer, PathKey, SearchResultsStatus,
+    SelectionEffects,
     actions::{Backtab, FoldAll, SelectAll, Tab, UnfoldAll},
     items::active_match_index,
     multibuffer_context_lines,
@@ -58,7 +58,7 @@ use util::{ResultExt as _, paths::PathMatcher};
 use workspace::{
     DeploySearch, ItemNavHistory, NewSearch, ToolbarItemEvent, ToolbarItemLocation,
     ToolbarItemView, Workspace, WorkspaceId,
-    item::{Item, ItemBufferKind, ItemEvent, ItemHandle, SaveOptions},
+    item::{Item, ItemBufferKind, ItemEvent, ItemHandle, ItemSettings, SaveOptions},
     searchable::{Direction, SearchEvent, SearchToken, SearchableItem, SearchableItemHandle},
 };
 
@@ -1151,7 +1151,10 @@ impl Item for ProjectSearchView {
             .as_ref()
             .map(|query| {
                 let query = query.replace('\n', "");
-                let query_text = util::truncate_and_trailoff(&query, MAX_TAB_TITLE_LEN);
+                let query_text = util::truncate_and_trailoff(
+                    &query,
+                    ItemSettings::get_global(cx).max_title_length,
+                );
                 query_text.into()
             });
 
