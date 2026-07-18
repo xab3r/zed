@@ -40,13 +40,23 @@ pub struct Toggle {
     #[serde(default)]
     pub select_last: bool,
 }
+/// Toggles between showing all tabs or just the current pane's tabs.
+#[derive(PartialEq, Clone, Deserialize, JsonSchema, Default, Action)]
+#[action(namespace = tab_switcher)]
+#[serde(deny_unknown_fields)]
+pub struct ToggleAll {
+    #[serde(default)]
+    pub select_last: bool,
+    /// Whether to list tabs in the order they appear in the tab bars instead of
+    /// by most recent activation.
+    #[serde(default)]
+    pub match_tabs_order: bool,
+}
 actions!(
     tab_switcher,
     [
         /// Closes the selected item in the tab switcher.
         CloseSelectedItem,
-        /// Toggles between showing all tabs or just the current pane's tabs.
-        ToggleAll,
         /// Toggles the tab switcher showing all tabs across all panes, deduplicated by path.
         /// Opens selected items in the active pane.
         OpenInActivePane,
@@ -74,7 +84,15 @@ impl TabSwitcher {
     ) {
         workspace.register_action(|workspace, action: &Toggle, window, cx| {
             let Some(tab_switcher) = workspace.active_modal::<Self>(cx) else {
-                Self::open(workspace, action.select_last, false, false, window, cx);
+                Self::open(
+                    workspace,
+                    action.select_last,
+                    false,
+                    false,
+                    false,
+                    window,
+                    cx,
+                );
                 return;
             };
 
@@ -84,9 +102,17 @@ impl TabSwitcher {
                     .update(cx, |picker, cx| picker.cycle_selection(window, cx))
             });
         });
-        workspace.register_action(|workspace, _action: &ToggleAll, window, cx| {
+        workspace.register_action(|workspace, action: &ToggleAll, window, cx| {
             let Some(tab_switcher) = workspace.active_modal::<Self>(cx) else {
-                Self::open(workspace, false, true, false, window, cx);
+                Self::open(
+                    workspace,
+                    action.select_last,
+                    true,
+                    false,
+                    action.match_tabs_order,
+                    window,
+                    cx,
+                );
                 return;
             };
 
@@ -98,7 +124,7 @@ impl TabSwitcher {
         });
         workspace.register_action(|workspace, _action: &OpenInActivePane, window, cx| {
             let Some(tab_switcher) = workspace.active_modal::<Self>(cx) else {
-                Self::open(workspace, false, true, true, window, cx);
+                Self::open(workspace, false, true, true, false, window, cx);
                 return;
             };
 
@@ -115,6 +141,7 @@ impl TabSwitcher {
         select_last: bool,
         is_global: bool,
         open_in_active_pane: bool,
+        match_tabs_order: bool,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
@@ -154,6 +181,7 @@ impl TabSwitcher {
                 weak_workspace,
                 is_global,
                 open_in_active_pane,
+                match_tabs_order,
                 window,
                 cx,
                 original_items,
@@ -279,6 +307,7 @@ pub struct TabSwitcherDelegate {
     original_items: Vec<(Entity<Pane>, usize)>,
     is_all_panes: bool,
     open_in_active_pane: bool,
+    match_tabs_order: bool,
     restored_items: bool,
 }
 
@@ -365,6 +394,7 @@ impl TabSwitcherDelegate {
         workspace: WeakEntity<Workspace>,
         is_all_panes: bool,
         open_in_active_pane: bool,
+        match_tabs_order: bool,
         window: &mut Window,
         cx: &mut Context<TabSwitcher>,
         original_items: Vec<(Entity<Pane>, usize)>,
@@ -380,6 +410,7 @@ impl TabSwitcherDelegate {
             matches: Vec::new(),
             is_all_panes,
             open_in_active_pane,
+            match_tabs_order,
             original_items,
             restored_items: false,
         }
@@ -454,9 +485,13 @@ impl TabSwitcherDelegate {
         }
 
         let mut matches = if query.is_empty() {
-            let history = workspace.read(cx).recently_activated_items(cx);
-            all_items
-                .sort_by_key(|tab| (Reverse(history.get(&tab.item.item_id())), tab.item_index));
+            // Items are collected in pane order, then tab order within each
+            // pane, so matching the tab bars requires no extra sorting.
+            if !self.match_tabs_order {
+                let history = workspace.read(cx).recently_activated_items(cx);
+                all_items
+                    .sort_by_key(|tab| (Reverse(history.get(&tab.item.item_id())), tab.item_index));
+            }
             all_items
         } else {
             let candidates = all_items
@@ -595,6 +630,21 @@ impl TabSwitcherDelegate {
 
         if self.select_last {
             let item_index = self.matches.len() - 1;
+            self.set_selected_index(item_index, window, cx);
+            return item_index;
+        }
+
+        // In tab order the active item can be anywhere in the list, so select
+        // its position to avoid preview-activating an unrelated tab on open.
+        if self.match_tabs_order
+            && let Ok(Some(active_item)) = self
+                .workspace
+                .read_with(cx, |workspace, cx| workspace.active_item(cx))
+            && let Some(item_index) = self
+                .matches
+                .iter()
+                .position(|tab_match| tab_match.item.item_id() == active_item.item_id())
+        {
             self.set_selected_index(item_index, window, cx);
             return item_index;
         }
