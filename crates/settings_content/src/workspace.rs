@@ -202,6 +202,11 @@ pub struct ItemSettingsContent {
     ///
     /// Default: false
     pub show_close_button: Option<ShowCloseButton>,
+    /// Maximum number of characters to display in a tab's title before
+    /// truncating it. Set to 0 to never truncate tab titles.
+    ///
+    /// Default: 24
+    pub max_title_length: Option<usize>,
 }
 
 #[with_fallible_options]
