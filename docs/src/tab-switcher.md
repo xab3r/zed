@@ -46,9 +46,11 @@ working on is always near the top.
 
 The {#action tab_switcher::ToggleAll} action additionally accepts a
 `match_tabs_order` option. When set to `true`, tabs are listed in the same
-order as they appear in the tab bars (pane by pane) instead of by recent
-activation, and the currently active tab is preselected. Searching is
-unaffected: typing a query always sorts the list by fuzzy-match relevance.
+order as they appear in the tab bars instead of by recent activation, and the
+currently active tab is preselected. Splits are visited in visual order — from
+the top-left pane to the bottom-right one — so the list reads like the editor
+layout. Searching is unaffected: typing a query always sorts the list by
+fuzzy-match relevance.
 
 ```json
 {
