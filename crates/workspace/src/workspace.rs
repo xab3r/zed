@@ -6337,6 +6337,12 @@ impl Workspace {
         &self.panes
     }
 
+    /// Unlike [`Self::panes`], which is ordered by pane creation, this returns
+    /// the center panes in visual layout order, from top-left to bottom-right.
+    pub fn panes_in_layout_order(&self) -> Vec<&Entity<Pane>> {
+        self.center.panes()
+    }
+
     pub fn active_pane(&self) -> &Entity<Pane> {
         &self.active_pane
     }

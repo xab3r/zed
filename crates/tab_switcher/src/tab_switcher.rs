@@ -439,7 +439,19 @@ impl TabSwitcherDelegate {
         };
         let mut all_items = Vec::new();
         let mut item_index = 0;
-        for pane_handle in workspace.read(cx).panes() {
+        // `Workspace::panes` is ordered by pane creation, which does not
+        // necessarily match the on-screen arrangement of splits.
+        let panes: Vec<Entity<Pane>> = if self.match_tabs_order {
+            workspace
+                .read(cx)
+                .panes_in_layout_order()
+                .into_iter()
+                .cloned()
+                .collect()
+        } else {
+            workspace.read(cx).panes().to_vec()
+        };
+        for pane_handle in &panes {
             let pane = pane_handle.read(cx);
             let items: Vec<Box<dyn ItemHandle>> =
                 pane.items().map(|item| item.boxed_clone()).collect();
@@ -460,8 +472,8 @@ impl TabSwitcherDelegate {
         }
 
         let mut matches = if query.is_empty() {
-            // Items are collected in pane order, then tab order within each
-            // pane, so matching the tab bars requires no extra sorting.
+            // Items are collected in split layout order, then tab order within
+            // each pane, so matching the tab bars requires no extra sorting.
             if !self.match_tabs_order {
                 let history = workspace.read(cx).recently_activated_items(cx);
                 all_items
