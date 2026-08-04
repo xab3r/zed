@@ -782,7 +782,13 @@ fn run() -> Result<()> {
     if args.foreground {
         app.run_foreground(url, user_data_dir.as_deref())?;
     } else {
-        app.launch(url, user_data_dir.as_deref())?;
+        // `--zed` and `--user-data-dir` explicitly target a particular binary
+        // or data set, so they route through regular instance discovery.
+        let sent_to_current_instance =
+            args.zed.is_none() && user_data_dir.is_none() && send_to_current_instance(&url);
+        if !sent_to_current_instance {
+            app.launch(url, user_data_dir.as_deref())?;
+        }
         sender.join().unwrap()?;
         if let Some(handle) = stdin_pipe_handle {
             handle.join().unwrap()?;
@@ -796,6 +802,82 @@ fn run() -> Result<()> {
         std::process::exit(exit_status);
     }
     Ok(())
+}
+
+/// When the CLI runs in a terminal spawned by a running Zed instance, that
+/// instance advertises its private CLI endpoint through the environment (see
+/// `cli::INSTANCE_SOCKET_ENV_VAR_NAME`). Sending the ipc url there targets the
+/// exact instance the terminal belongs to; channel-wide instance discovery
+/// cannot distinguish between multiple running instances of one channel.
+///
+/// Returns false when the request could not be delivered that way — no
+/// endpoint advertised, an instance of a different release channel, or a stale
+/// endpoint of a dead instance (e.g. environment preserved by tmux) — in which
+/// case the caller falls back to regular instance discovery.
+fn send_to_current_instance(ipc_url: &str) -> bool {
+    let Ok(endpoint) = env::var(cli::INSTANCE_SOCKET_ENV_VAR_NAME) else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixDatagram;
+
+        let is_same_channel_instance_socket = Path::new(&endpoint)
+            .file_name()
+            .and_then(OsStr::to_str)
+            .and_then(|name| name.strip_prefix(&cli::instance_socket_file_name_prefix()))
+            .and_then(|rest| rest.strip_suffix(".sock"))
+            .is_some_and(|pid| pid.parse::<u32>().is_ok());
+        if !is_same_channel_instance_socket {
+            return false;
+        }
+
+        let Ok(socket) = UnixDatagram::unbound() else {
+            return false;
+        };
+        socket.connect(&endpoint).is_ok() && socket.send(ipc_url.as_bytes()).is_ok()
+    }
+
+    #[cfg(windows)]
+    {
+        use ::windows::{
+            Win32::{
+                Foundation::{CloseHandle, GENERIC_WRITE},
+                Storage::FileSystem::{
+                    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE, OPEN_EXISTING,
+                    WriteFile,
+                },
+            },
+            core::HSTRING,
+        };
+
+        let is_same_channel_instance_pipe = endpoint
+            .strip_prefix(&cli::instance_pipe_name_prefix())
+            .is_some_and(|pid| pid.parse::<u32>().is_ok());
+        if !is_same_channel_instance_pipe {
+            return false;
+        }
+
+        unsafe {
+            let Ok(pipe) = CreateFileW(
+                &HSTRING::from(endpoint.as_str()),
+                GENERIC_WRITE.0,
+                FILE_SHARE_MODE::default(),
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES::default(),
+                None,
+            ) else {
+                return false;
+            };
+            let mut bytes_written = 0;
+            let sent =
+                WriteFile(pipe, Some(ipc_url.as_bytes()), Some(&mut bytes_written), None).is_ok();
+            let _ = CloseHandle(pipe);
+            sent
+        }
+    }
 }
 
 fn anonymous_fd(path: &str) -> Option<fs::File> {
