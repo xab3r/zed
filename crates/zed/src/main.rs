@@ -296,6 +296,27 @@ fn main() {
             zlog::init_output_stdout();
         };
     }
+
+    // Bind this instance's private CLI socket and advertise it in this
+    // process' environment, so that `zed` invoked in a terminal spawned by
+    // this instance (which inherits the environment) reaches this exact
+    // instance even when multiple instances are running. This must happen
+    // before other threads are spawned, as mutating the environment is not
+    // thread-safe on some platforms.
+    #[cfg(unix)]
+    let instance_cli_socket = crate::zed::bind_instance_cli_socket();
+    #[cfg(unix)]
+    if let Some((socket_path, _)) = &instance_cli_socket {
+        unsafe { env::set_var(cli::INSTANCE_SOCKET_ENV_VAR_NAME, socket_path) };
+    }
+    #[cfg(target_os = "windows")]
+    unsafe {
+        env::set_var(
+            cli::INSTANCE_SOCKET_ENV_VAR_NAME,
+            cli::instance_pipe_name(process::id()),
+        )
+    };
+
     ztracing::init();
 
     let version = option_env!("ZED_BUILD_ID");
@@ -376,8 +397,19 @@ fn main() {
     };
     if failed_single_instance_check {
         println!("zed is already running");
+        #[cfg(unix)]
+        if let Some((socket_path, _)) = &instance_cli_socket {
+            std::fs::remove_file(socket_path).log_err();
+        }
         return;
     }
+
+    #[cfg(unix)]
+    if let Some((_, instance_cli_socket)) = instance_cli_socket {
+        crate::zed::listen_for_instance_cli_connections(instance_cli_socket, open_listener.clone());
+    }
+    #[cfg(target_os = "windows")]
+    crate::zed::windows_only_instance::listen_for_instance_cli_connections(open_listener.clone());
 
     let should_install_crash_handler =
         client::telemetry::should_install_crash_handler(*release_channel::RELEASE_CHANNEL);
