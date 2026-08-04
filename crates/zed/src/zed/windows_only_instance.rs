@@ -45,12 +45,15 @@ pub fn handle_single_instance(opener: OpenListener, args: &Args) -> bool {
         std::thread::Builder::new()
             .name("EnsureSingleton".to_owned())
             .spawn(move || {
-                with_pipe(&|url| {
-                    opener.open(RawOpenRequest {
-                        urls: vec![url],
-                        ..Default::default()
-                    })
-                })
+                with_pipe(
+                    &format!("\\\\.\\pipe\\{}-Named-Pipe", app_identifier()),
+                    &|url| {
+                        opener.open(RawOpenRequest {
+                            urls: vec![url],
+                            ..Default::default()
+                        })
+                    },
+                )
             })
             .unwrap();
     } else if !args.foreground {
@@ -61,10 +64,29 @@ pub fn handle_single_instance(opener: OpenListener, args: &Args) -> bool {
     is_first_instance
 }
 
-fn with_pipe(f: &dyn Fn(String)) {
+/// Listens on this instance's private pid-suffixed pipe, advertised to child
+/// processes via `cli::INSTANCE_SOCKET_ENV_VAR_NAME`, so that `zed` invoked in
+/// this instance's terminals reaches this exact instance. The shared pipe of
+/// `handle_single_instance` belongs to whichever instance was first and cannot
+/// distinguish between multiple running instances.
+pub fn listen_for_instance_cli_connections(opener: OpenListener) {
+    std::thread::Builder::new()
+        .name("InstanceCliPipe".to_owned())
+        .spawn(move || {
+            with_pipe(&cli::instance_pipe_name(std::process::id()), &|url| {
+                opener.open(RawOpenRequest {
+                    urls: vec![url],
+                    ..Default::default()
+                })
+            })
+        })
+        .unwrap();
+}
+
+fn with_pipe(pipe_name: &str, f: &dyn Fn(String)) {
     let pipe = unsafe {
         CreateNamedPipeW(
-            &HSTRING::from(format!("\\\\.\\pipe\\{}-Named-Pipe", app_identifier())),
+            &HSTRING::from(pipe_name),
             PIPE_ACCESS_INBOUND,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1,
