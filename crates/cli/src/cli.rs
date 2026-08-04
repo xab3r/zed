@@ -90,6 +90,46 @@ pub enum CliResponse {
 /// therefore it should always be accessed through the `FORCE_CLI_MODE` static.
 pub const FORCE_CLI_MODE_ENV_VAR_NAME: &str = "ZED_FORCE_CLI_MODE";
 
+/// A running Zed instance sets this variable for its child processes (e.g.
+/// built-in terminals). It holds the instance's private CLI endpoint — a
+/// datagram socket path on Unix, a named pipe path on Windows — accepting
+/// `zed-cli://` urls. When present, the CLI sends its request there so that
+/// it reaches the exact instance it was spawned from, which channel-wide
+/// instance discovery cannot guarantee when multiple instances are running.
+pub const INSTANCE_SOCKET_ENV_VAR_NAME: &str = "ZED_CLI_SOCKET";
+
+/// File name prefix of per-instance CLI sockets of this release channel (Unix).
+/// The channel is embedded so that a CLI from one channel never sends requests
+/// to an instance of another, whose IPC protocol may be incompatible.
+#[cfg(unix)]
+pub fn instance_socket_file_name_prefix() -> String {
+    format!("zed-{}-", *release_channel::RELEASE_CHANNEL_NAME)
+}
+
+/// File name of the per-instance CLI socket of the Zed instance with the given
+/// pid (Unix).
+#[cfg(unix)]
+pub fn instance_socket_file_name(pid: u32) -> String {
+    format!("{}{pid}.sock", instance_socket_file_name_prefix())
+}
+
+/// Name prefix of per-instance CLI named pipes of this release channel
+/// (Windows).
+#[cfg(windows)]
+pub fn instance_pipe_name_prefix() -> String {
+    format!(
+        "\\\\.\\pipe\\{}-Instance-Pipe-",
+        release_channel::app_identifier()
+    )
+}
+
+/// Name of the per-instance CLI named pipe of the Zed instance with the given
+/// pid (Windows).
+#[cfg(windows)]
+pub fn instance_pipe_name(pid: u32) -> String {
+    format!("{}{pid}", instance_pipe_name_prefix())
+}
+
 /// Abstracts the transport for sending CLI responses (Zed → CLI).
 ///
 /// Production code uses `IpcSender<CliResponse>`. Tests can provide in-memory

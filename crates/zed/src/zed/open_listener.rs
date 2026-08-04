@@ -418,6 +418,70 @@ pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
         std::fs::remove_file(&sock_path)?;
     }
     let listener = UnixDatagram::bind(&sock_path)?;
+    spawn_url_socket_reader(listener, opener);
+    Ok(())
+}
+
+/// Binds the socket on which this instance receives `zed-cli://` urls from
+/// `zed` invocations in its own terminals. Unlike the per-channel socket of
+/// `listen_for_cli_connections`, which only the first instance of a release
+/// channel can hold, every instance gets one, suffixed with its pid. Its path
+/// is advertised to child processes via `cli::INSTANCE_SOCKET_ENV_VAR_NAME`,
+/// letting the CLI target the exact instance it was spawned from when multiple
+/// instances are running.
+///
+/// Only binds; urls are received once the socket is handed to
+/// `listen_for_instance_cli_connections`. This split allows binding early in
+/// startup — before other threads exist, so the environment variable can be
+/// set safely — while the reader thread starts later, when the
+/// `OpenListener` is available.
+#[cfg(unix)]
+pub fn bind_instance_cli_socket() -> Option<(PathBuf, std::os::unix::net::UnixDatagram)> {
+    use std::os::unix::net::UnixDatagram;
+
+    let socket_prefix = cli::instance_socket_file_name_prefix();
+
+    // Instances leave their socket files behind when they exit, so sweep the
+    // ones nobody is listening on anymore. This also unlinks our own path if a
+    // dead instance's pid got recycled into ours.
+    if let Ok(entries) = std::fs::read_dir(paths::data_dir()) {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let is_instance_socket = file_name
+                .to_str()
+                .and_then(|name| name.strip_prefix(&socket_prefix))
+                .and_then(|rest| rest.strip_suffix(".sock"))
+                .is_some_and(|pid| pid.parse::<u32>().is_ok());
+            if !is_instance_socket {
+                continue;
+            }
+            let socket_path = entry.path();
+            if let Ok(probe) = UnixDatagram::unbound()
+                && let Err(error) = probe.connect(&socket_path)
+                && error.kind() == std::io::ErrorKind::ConnectionRefused
+            {
+                std::fs::remove_file(&socket_path).log_err();
+            }
+        }
+    }
+
+    let socket_path = paths::data_dir().join(cli::instance_socket_file_name(std::process::id()));
+    let listener = UnixDatagram::bind(&socket_path)
+        .with_context(|| format!("binding instance cli socket at {socket_path:?}"))
+        .log_err()?;
+    Some((socket_path, listener))
+}
+
+#[cfg(unix)]
+pub fn listen_for_instance_cli_connections(
+    listener: std::os::unix::net::UnixDatagram,
+    opener: OpenListener,
+) {
+    spawn_url_socket_reader(listener, opener);
+}
+
+#[cfg(unix)]
+fn spawn_url_socket_reader(listener: std::os::unix::net::UnixDatagram, opener: OpenListener) {
     thread::spawn(move || {
         let mut buf = [0u8; 1024];
         while let Ok(len) = listener.recv(&mut buf) {
@@ -427,7 +491,6 @@ pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
             });
         }
     });
-    Ok(())
 }
 
 fn connect_to_cli(
