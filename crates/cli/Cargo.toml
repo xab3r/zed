@@ -50,6 +50,8 @@ fork.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
 core-services = "1"
+libc.workspace = true
+log.workspace = true
 plist = "1.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
