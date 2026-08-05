@@ -72,6 +72,8 @@ fork = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = { workspace = true, optional = true }
 core-services = { workspace = true, optional = true }
+libc.workspace = true
+log.workspace = true
 plist = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
