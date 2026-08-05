@@ -1390,7 +1390,7 @@ mod mac_os {
         ffi::OsStr,
         fs, io,
         path::{Path, PathBuf},
-        process::{Command, ExitStatus},
+        process::{Command, ExitStatus, Stdio},
         ptr,
     };
 
@@ -1463,6 +1463,25 @@ mod mac_os {
         fn launch(&self, url: String, user_data_dir: Option<&str>) -> anyhow::Result<()> {
             match self {
                 Self::App { app_bundle, .. } => {
+                    // LaunchServices delivers the url through an
+                    // `application:openURLs:` Apple event whose arrival is not
+                    // ordered with respect to the app's own startup. On a cold
+                    // boot the event can land after startup has already
+                    // concluded that no CLI request initiated the launch,
+                    // making it restore the previous session or create an
+                    // empty window in addition to the requested one. Only
+                    // route through LaunchServices when an instance is already
+                    // running, where the event is simply queued to it; boot
+                    // cold instances directly so the url arrives via argv,
+                    // which startup reads before deciding what to open.
+                    if !cli::mac_single_instance::check_got_handshake() {
+                        return boot_app_bundle(
+                            app_bundle.join("Contents/MacOS/zed"),
+                            url,
+                            user_data_dir,
+                        );
+                    }
+
                     let app_path = app_bundle;
 
                     let status = unsafe {
@@ -1568,6 +1587,35 @@ mod mac_os {
                 Self::LocalPath { executable, .. } => executable,
             }
         }
+    }
+
+    /// Boots the app bundle's executable directly, handing the ipc url over
+    /// via argv the way the Linux and local-development flows do, instead of
+    /// going through LaunchServices whose url delivery races app startup.
+    fn boot_app_bundle(
+        executable: PathBuf,
+        ipc_url: String,
+        user_data_dir: Option<&str>,
+    ) -> Result<()> {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut command = Command::new(&executable);
+        command.env(FORCE_CLI_MODE_ENV_VAR_NAME, "");
+        if let Some(dir) = user_data_dir {
+            command.arg("--user-data-dir").arg(dir);
+        }
+        command.arg(ipc_url);
+        // A new process group and no inherited stdio detach the editor from
+        // the invoking terminal, so closing it or pressing ^C there does not
+        // take the editor down.
+        command
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("Spawning {command:?}"))?;
+        Ok(())
     }
 
     pub(super) fn spawn_channel_cli(

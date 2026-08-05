@@ -3077,6 +3077,8 @@ dependencies = [
  "exec",
  "fork",
  "ipc-channel",
+ "libc",
+ "log",
  "parking_lot",
  "paths",
  "plist",
